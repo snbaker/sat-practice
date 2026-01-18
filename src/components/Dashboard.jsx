@@ -1,3 +1,5 @@
+import { isRichFormat, getTotalScore } from '../utils/dataTransform'
+
 export default function Dashboard({ results }) {
   if (!results || results.length === 0) {
     return (
@@ -10,19 +12,34 @@ export default function Dashboard({ results }) {
     )
   }
 
-  const sortedResults = [...results].sort((a, b) => new Date(a.date) - new Date(b.date))
+  // Helper to get score from a result (handles both formats)
+  const getScore = (result) => {
+    const { data } = result
+    if (isRichFormat(data)) {
+      return getTotalScore(data)
+    }
+    return data.totalScore || 0
+  }
+
+  // Helper to get date from a result
+  const getDate = (result) => {
+    return result.data?.date || result.uploadedAt
+  }
+
+  const sortedResults = [...results].sort((a, b) => new Date(getDate(a)) - new Date(getDate(b)))
   const latestResult = sortedResults[sortedResults.length - 1]
   const previousResult = sortedResults.length > 1 ? sortedResults[sortedResults.length - 2] : null
 
+  const latestScore = getScore(latestResult)
+  const previousScore = previousResult ? getScore(previousResult) : null
+
   const averageScore = Math.round(
-    results.reduce((sum, r) => sum + (r.totalScore || 0), 0) / results.length
+    results.reduce((sum, r) => sum + getScore(r), 0) / results.length
   )
 
-  const highestScore = Math.max(...results.map(r => r.totalScore || 0))
+  const highestScore = Math.max(...results.map(r => getScore(r)))
 
-  const scoreDiff = previousResult
-    ? (latestResult.totalScore || 0) - (previousResult.totalScore || 0)
-    : null
+  const scoreDiff = previousScore !== null ? latestScore - previousScore : null
 
   return (
     <div className="space-y-6">
@@ -34,7 +51,7 @@ export default function Dashboard({ results }) {
 
         <div className="stat">
           <div className="stat-title">Latest Score</div>
-          <div className="stat-value">{latestResult.totalScore || '-'}</div>
+          <div className="stat-value">{latestScore || '-'}</div>
           {scoreDiff !== null && (
             <div className={`stat-desc ${scoreDiff >= 0 ? 'text-success' : 'text-error'}`}>
               {scoreDiff >= 0 ? '+' : ''}{scoreDiff} from previous
@@ -59,8 +76,9 @@ export default function Dashboard({ results }) {
             <h3 className="card-title">Score Progress</h3>
             <div className="w-full h-48 flex items-end gap-2 pt-4">
               {sortedResults.map((result, idx) => {
-                const score = result.totalScore || 0
+                const score = getScore(result)
                 const heightPercent = (score / 1600) * 100
+                const date = getDate(result)
                 return (
                   <div
                     key={result.id || idx}
@@ -72,7 +90,7 @@ export default function Dashboard({ results }) {
                       style={{ height: `${heightPercent}%`, minHeight: '4px' }}
                     />
                     <span className="text-xs text-base-content/60 truncate w-full text-center">
-                      {new Date(result.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      {new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     </span>
                   </div>
                 )

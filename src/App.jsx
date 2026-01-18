@@ -26,9 +26,9 @@ function App() {
 
   const handleFileLoad = (data) => {
     const newResult = {
-      ...data,
-      id: data.id || Date.now(),
-      date: data.date || new Date().toISOString()
+      data,
+      id: Date.now(),
+      uploadedAt: new Date().toISOString()
     }
     setResults(prev => [...prev, newResult])
     setActiveTab('results')
@@ -90,8 +90,39 @@ function App() {
           <div className="space-y-4">
             <DropZone onFileLoad={handleFileLoad} />
             <div className="text-sm text-base-content/60">
-              <p className="font-medium mb-2">Expected JSON format:</p>
-              <pre className="bg-base-200 p-4 rounded-lg overflow-x-auto text-xs">
+              <p className="font-medium mb-2">Supported JSON formats:</p>
+              <div className="collapse collapse-arrow bg-base-200 mb-2">
+                <input type="radio" name="format-accordion" defaultChecked />
+                <div className="collapse-title text-sm font-medium">
+                  Question-level format (detailed)
+                </div>
+                <div className="collapse-content">
+                  <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
+{`[
+  {
+    "id": "reading",
+    "items": [
+      {
+        "answer": { "correct": true },
+        "prompt": "Question text..."
+      }
+    ]
+  },
+  {
+    "id": "math",
+    "items": [...]
+  }
+]`}
+                  </pre>
+                </div>
+              </div>
+              <div className="collapse collapse-arrow bg-base-200">
+                <input type="radio" name="format-accordion" />
+                <div className="collapse-title text-sm font-medium">
+                  Summary format
+                </div>
+                <div className="collapse-content">
+                  <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
 {`{
   "name": "Practice Test 1",
   "date": "2024-01-15",
@@ -100,20 +131,14 @@ function App() {
     {
       "name": "Reading & Writing",
       "score": 720,
-      "maxScore": 800,
       "correct": 45,
       "total": 54
-    },
-    {
-      "name": "Math",
-      "score": 700,
-      "maxScore": 800,
-      "correct": 38,
-      "total": 44
     }
   ]
 }`}
-              </pre>
+                  </pre>
+                </div>
+              </div>
             </div>
           </div>
         )}
