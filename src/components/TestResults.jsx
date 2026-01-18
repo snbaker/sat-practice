@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { isRichFormat, getSectionStats, getTotalScore } from '../utils/dataTransform'
 
-export default function TestResults({ result, onDelete }) {
+export default function TestResults({ result, onDelete, onRetake }) {
   const { data, id, uploadedAt } = result
   const [expandedSection, setExpandedSection] = useState(null)
   const [expandedQuestion, setExpandedQuestion] = useState(null)
@@ -47,27 +47,42 @@ export default function TestResults({ result, onDelete }) {
   }
 
   // Derive data based on format
-  const totalScore = isRich ? getTotalScore(data) : data.totalScore
   const sections = isRich
     ? data.map(section => ({ ...getSectionStats(section), items: section.items }))
     : data.sections || []
-  const displayName = data.name || 'Practice Test'
+  const displayName = data.name || result.name || 'Practice Test'
   const displayDate = data.date || uploadedAt
+
+  // Calculate totals
+  const totalQuestions = sections.reduce((sum, s) => sum + (s.total || 0), 0)
+  const totalCorrect = sections.reduce((sum, s) => sum + (s.correct || 0), 0)
+  const totalIncorrect = totalQuestions - totalCorrect
 
   return (
     <div className="card bg-base-200 shadow-md">
       <div className="card-body">
-        <div className="flex justify-between items-start">
-          <div>
-            <h3 className="card-title">{displayName}</h3>
-            <p className="text-sm text-base-content/60">{formatDate(displayDate)}</p>
+        <div className="space-y-4">
+          <div className="flex justify-between items-start">
+            <div>
+              <h3 className="card-title">{displayName}</h3>
+              <p className="text-sm text-base-content/60">{formatDate(displayDate)}</p>
+            </div>
           </div>
-          {totalScore !== undefined && totalScore !== null && (
-            <div className="text-right">
-              <div className={`text-3xl font-bold ${getScoreColor(totalScore, 1600)}`}>
-                {totalScore}
+
+          {totalQuestions > 0 && (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-base-100 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold">{totalQuestions}</div>
+                <div className="text-xs text-base-content/60">Total Questions</div>
               </div>
-              <div className="text-xs text-base-content/60">/ 1600</div>
+              <div className="bg-base-100 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-success">{totalCorrect}</div>
+                <div className="text-xs text-base-content/60">Correct Answers</div>
+              </div>
+              <div className="bg-base-100 rounded-lg p-4 text-center">
+                <div className="text-2xl font-bold text-error">{totalIncorrect}</div>
+                <div className="text-xs text-base-content/60">Incorrect Answers</div>
+              </div>
             </div>
           )}
         </div>
@@ -89,19 +104,18 @@ export default function TestResults({ result, onDelete }) {
                   <div className="flex justify-between items-center">
                     <div>
                       <div className="font-medium">{section.name}</div>
+                    </div>
+                    <div className="flex items-center gap-3">
                       {section.correct !== undefined && section.total !== undefined && (
-                        <div className="text-sm text-base-content/60">
-                          {section.correct} / {section.total} correct ({Math.round((section.correct / section.total) * 100)}%)
+                        <div className="text-right">
+                          <span className="text-success font-medium">{section.correct}</span>
+                          <span className="text-base-content/40"> / </span>
+                          <span>{section.total}</span>
+                          <span className="text-sm text-base-content/60 ml-2">
+                            ({Math.round((section.correct / section.total) * 100)}%)
+                          </span>
                         </div>
                       )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <div className={`text-2xl font-bold ${getScoreColor(section.score, section.maxScore || 800)}`}>
-                        {section.score}
-                        <span className="text-sm text-base-content/60 font-normal">
-                          {' '}/ {section.maxScore || 800}
-                        </span>
-                      </div>
                       {section.items && (
                         <svg
                           className={`w-5 h-5 transition-transform ${expandedSection === (section.id || idx) ? 'rotate-180' : ''}`}
@@ -229,14 +243,24 @@ export default function TestResults({ result, onDelete }) {
           </div>
         )}
 
-        {onDelete && (
+        {(onDelete || onRetake) && (
           <div className="card-actions justify-end mt-4">
-            <button
-              className="btn btn-ghost btn-sm text-error"
-              onClick={() => onDelete(id)}
-            >
-              Delete
-            </button>
+            {onDelete && (
+              <button
+                className="btn btn-ghost btn-sm text-error"
+                onClick={() => onDelete(id)}
+              >
+                Delete
+              </button>
+            )}
+            {onRetake && (
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => onRetake(result)}
+              >
+                Retake
+              </button>
+            )}
           </div>
         )}
       </div>
