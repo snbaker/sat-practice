@@ -74,7 +74,7 @@ export default function Dashboard({ results }) {
         <div className="card bg-base-200 shadow">
           <div className="card-body">
             <h3 className="card-title">Accuracy Over Time</h3>
-            <div className="w-full h-48 flex items-end gap-2 pt-4">
+            <div className="w-full flex gap-2 pt-4">
               {sortedResults.map((result, idx) => {
                 const stats = getStats(result)
                 const pct = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0
@@ -85,10 +85,12 @@ export default function Dashboard({ results }) {
                     className="flex-1 flex flex-col items-center gap-1"
                   >
                     <span className="text-xs font-medium">{pct}%</span>
-                    <div
-                      className={`w-full rounded-t transition-all ${pct >= 80 ? 'bg-success' : pct >= 60 ? 'bg-warning' : 'bg-error'}`}
-                      style={{ height: `${pct}%`, minHeight: '4px' }}
-                    />
+                    <div className="w-full h-40 flex items-end">
+                      <div
+                        className={`w-full rounded-t transition-all ${pct >= 80 ? 'bg-success' : pct >= 60 ? 'bg-warning' : 'bg-error'}`}
+                        style={{ height: `${pct}%`, minHeight: '4px' }}
+                      />
+                    </div>
                     <span className="text-xs text-base-content/60 truncate w-full text-center">
                       {new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                     </span>
