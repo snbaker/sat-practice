@@ -1,10 +1,18 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { hasApiKey, generateTest } from '../services/openai'
+import { getTopicName } from '../utils/topicMappings'
 
-export default function Generate({ results, onTestGenerated, onOpenSettings }) {
-  const [mode, setMode] = useState('ai') // 'ai' or 'review'
+export default function Generate({ results, onTestGenerated, onOpenSettings, categoryFilter, onClearCategoryFilter }) {
+  const [mode, setMode] = useState('review') // 'ai' or 'review'
   const [section, setSection] = useState('both')
   const [questionCount, setQuestionCount] = useState(5)
+
+  // When category filter is set, update section to match
+  useEffect(() => {
+    if (categoryFilter) {
+      setSection(categoryFilter.sectionId)
+    }
+  }, [categoryFilter])
   const [wrongRatio, setWrongRatio] = useState(70) // percentage of wrong questions
   const [loading, setLoading] = useState(false)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
@@ -64,13 +72,17 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
         setProgress({ current, total })
       })
 
+      const categoryName = categoryFilter ? getTopicName(categoryFilter.categoryCode, categoryFilter.sectionId) : null
       const newResult = {
         data: testData,
         id: Date.now(),
         uploadedAt: new Date().toISOString(),
-        name: `AI Practice - ${new Date().toLocaleDateString()}`,
+        name: categoryName
+          ? `${categoryName} (AI) - ${new Date().toLocaleDateString()}`
+          : `AI Practice - ${new Date().toLocaleDateString()}`,
         generated: true,
-        generationType: 'ai',
+        generationType: categoryFilter ? 'category' : 'ai',
+        categoryCode: categoryFilter?.categoryCode,
         taken: false
       }
 
@@ -96,8 +108,15 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
       pool.push(...availableQuestions.math)
     }
 
+    // Filter by category if set
+    if (categoryFilter) {
+      pool = pool.filter(q => q.metadata?.PRIMARY_CLASS_CD === categoryFilter.categoryCode)
+    }
+
     if (pool.length === 0) {
-      setError('No questions available from uploaded tests. Upload some tests first!')
+      setError(categoryFilter
+        ? `No questions available for this category. Try clearing the category filter.`
+        : 'No questions available from uploaded tests. Upload some tests first!')
       return
     }
 
@@ -155,13 +174,17 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
       testData.push({ id: 'math', items: mathItems })
     }
 
+    const categoryName = categoryFilter ? getTopicName(categoryFilter.categoryCode, categoryFilter.sectionId) : null
     const newResult = {
       data: testData,
       id: Date.now(),
       uploadedAt: new Date().toISOString(),
-      name: `Review Practice - ${new Date().toLocaleDateString()}`,
+      name: categoryName
+        ? `${categoryName} Review - ${new Date().toLocaleDateString()}`
+        : `Review Practice - ${new Date().toLocaleDateString()}`,
       generated: true,
-      generationType: 'review',
+      generationType: categoryFilter ? 'category' : 'review',
+      categoryCode: categoryFilter?.categoryCode,
       taken: false
     }
 
@@ -185,6 +208,22 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
       <div className="card bg-base-200 shadow-md">
         <div className="card-body">
           <h2 className="card-title">Generate Practice Test</h2>
+
+          {/* Category Filter Banner */}
+          {categoryFilter && (
+            <div className="alert alert-info">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              <span>
+                Focusing on: <strong>{getTopicName(categoryFilter.categoryCode, categoryFilter.sectionId)}</strong>
+                {' '}({categoryFilter.sectionId === 'reading' ? 'Reading & Writing' : 'Math'})
+              </span>
+              <button className="btn btn-sm btn-ghost" onClick={onClearCategoryFilter}>
+                Clear
+              </button>
+            </div>
+          )}
 
           {/* Mode Selection */}
           <div>

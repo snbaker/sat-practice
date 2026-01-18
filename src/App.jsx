@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
 import DropZone from './components/DropZone'
 import TestResults from './components/TestResults'
 import Dashboard from './components/Dashboard'
@@ -6,19 +7,28 @@ import Analysis from './components/Analysis'
 import Generate from './components/Generate'
 import Settings from './components/Settings'
 import TakeTest from './components/TakeTest'
+import { getTopicName } from './utils/topicMappings'
 
 const STORAGE_KEY = 'sat-practice-results'
 const THEME_KEY = 'sat-practice-theme'
 
 function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
   const [results, setResults] = useState([])
-  const [activeTab, setActiveTab] = useState('dashboard')
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [takingTest, setTakingTest] = useState(null)
   const [initialized, setInitialized] = useState(false)
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem(THEME_KEY) || 'light'
   })
+
+  // Get current tab from path
+  const getActiveTab = () => {
+    const path = location.pathname.slice(1) || 'dashboard'
+    return path.split('/')[0]
+  }
+  const activeTab = getActiveTab()
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -94,7 +104,7 @@ function App() {
       uploadedAt: new Date().toISOString()
     }
     setResults(prev => [...prev, newResult])
-    setActiveTab('history')
+    navigate('/history')
   }
 
   const handleDelete = (id) => {
@@ -109,7 +119,7 @@ function App() {
 
   const handleTestGenerated = (newResult) => {
     setResults(prev => [...prev, newResult])
-    setActiveTab('practice')
+    navigate('/practice')
   }
 
   const handleTakeTest = (result) => {
@@ -122,6 +132,18 @@ function App() {
 
   const handleCancelTest = () => {
     setTakingTest(null)
+  }
+
+  const [categoryFilter, setCategoryFilter] = useState(null)
+
+  const handlePracticeCategory = (sectionId, categoryCode) => {
+    // Navigate to Generate with category pre-selected
+    setCategoryFilter({ sectionId, categoryCode })
+    navigate('/generate')
+  }
+
+  const handleClearCategoryFilter = () => {
+    setCategoryFilter(null)
   }
 
   const handleRetakeTest = (result) => {
@@ -211,74 +233,79 @@ function App() {
 
       <div className="container mx-auto px-4 py-8 max-w-4xl">
         <div role="tablist" className="tabs tabs-boxed mb-6">
-          <button
+          <Link
+            to="/"
             role="tab"
             className={`tab ${activeTab === 'dashboard' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
           >
             Dashboard
-          </button>
-          <button
+          </Link>
+          <Link
+            to="/analysis"
             role="tab"
             className={`tab ${activeTab === 'analysis' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('analysis')}
           >
             Analysis
-          </button>
-          <button
+          </Link>
+          <Link
+            to="/generate"
             role="tab"
             className={`tab ${activeTab === 'generate' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('generate')}
           >
             Generate
-          </button>
-          <button
+          </Link>
+          <Link
+            to="/practice"
             role="tab"
             className={`tab ${activeTab === 'practice' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('practice')}
           >
             Practice ({results.filter(r => r.generated).length})
-          </button>
-          <button
+          </Link>
+          <Link
+            to="/upload"
             role="tab"
             className={`tab ${activeTab === 'upload' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('upload')}
           >
             Upload
-          </button>
-          <button
+          </Link>
+          <Link
+            to="/history"
             role="tab"
             className={`tab ${activeTab === 'history' ? 'tab-active' : ''}`}
-            onClick={() => setActiveTab('history')}
           >
             History ({results.filter(r => !r.generated).length})
-          </button>
+          </Link>
         </div>
 
-        {activeTab === 'dashboard' && <Dashboard results={results} />}
+        <Routes>
+          <Route path="/" element={<Dashboard results={results} />} />
 
-        {activeTab === 'analysis' && <Analysis results={results} />}
+          <Route path="/analysis" element={
+            <Analysis results={results} onPracticeCategory={handlePracticeCategory} />
+          } />
 
-        {activeTab === 'generate' && (
-          <Generate
-            results={results}
-            onTestGenerated={handleTestGenerated}
-            onOpenSettings={() => setSettingsOpen(true)}
-          />
-        )}
+          <Route path="/generate" element={
+            <Generate
+              results={results}
+              onTestGenerated={handleTestGenerated}
+              onOpenSettings={() => setSettingsOpen(true)}
+              categoryFilter={categoryFilter}
+              onClearCategoryFilter={handleClearCategoryFilter}
+            />
+          } />
 
-        {activeTab === 'upload' && (
-          <div className="space-y-4">
-            <DropZone onFileLoad={handleFileLoad} />
-            <div className="text-sm text-base-content/60">
-              <p className="font-medium mb-2">Supported JSON formats:</p>
-              <div className="collapse collapse-arrow bg-base-200 mb-2">
-                <input type="radio" name="format-accordion" defaultChecked />
-                <div className="collapse-title text-sm font-medium">
-                  Question-level format (detailed)
-                </div>
-                <div className="collapse-content">
-                  <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
+          <Route path="/upload" element={
+            <div className="space-y-4">
+              <DropZone onFileLoad={handleFileLoad} />
+              <div className="text-sm text-base-content/60">
+                <p className="font-medium mb-2">Supported JSON formats:</p>
+                <div className="collapse collapse-arrow bg-base-200 mb-2">
+                  <input type="radio" name="format-accordion" defaultChecked />
+                  <div className="collapse-title text-sm font-medium">
+                    Question-level format (detailed)
+                  </div>
+                  <div className="collapse-content">
+                    <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
 {`[
   {
     "id": "reading",
@@ -294,16 +321,16 @@ function App() {
     "items": [...]
   }
 ]`}
-                  </pre>
+                    </pre>
+                  </div>
                 </div>
-              </div>
-              <div className="collapse collapse-arrow bg-base-200">
-                <input type="radio" name="format-accordion" />
-                <div className="collapse-title text-sm font-medium">
-                  Summary format
-                </div>
-                <div className="collapse-content">
-                  <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
+                <div className="collapse collapse-arrow bg-base-200">
+                  <input type="radio" name="format-accordion" />
+                  <div className="collapse-title text-sm font-medium">
+                    Summary format
+                  </div>
+                  <div className="collapse-content">
+                    <pre className="bg-base-300 p-3 rounded-lg overflow-x-auto text-xs">
 {`{
   "name": "Practice Test 1",
   "date": "2024-01-15",
@@ -317,109 +344,114 @@ function App() {
     }
   ]
 }`}
-                  </pre>
+                    </pre>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        )}
+          } />
 
-        {activeTab === 'practice' && (
-          <div className="space-y-4">
-            {results.filter(r => r.generated).length === 0 ? (
-              <div className="alert">
-                <span>No practice tests yet. Go to Generate to create one!</span>
-              </div>
-            ) : (
-              results
-                .filter(r => r.generated)
-                .sort((a, b) => new Date(b.uploadedAt || b.date) - new Date(a.uploadedAt || a.date))
-                .map(result => (
-                  <div key={result.id}>
-                    {!result.taken ? (
-                      <div className="card bg-base-200 shadow-md">
-                        <div className="card-body">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <h3 className="card-title">{result.name}</h3>
-                              <p className="text-sm text-base-content/60">
-                                {new Date(result.uploadedAt).toLocaleDateString('en-US', {
-                                  year: 'numeric',
-                                  month: 'short',
-                                  day: 'numeric'
-                                })}
-                              </p>
-                              <p className="text-sm mt-2">
-                                {result.data.reduce((sum, s) => sum + (s.items?.length || 0), 0)} questions
-                              </p>
-                            </div>
-                            <div className="flex gap-2">
-                              <div className="badge badge-primary">New</div>
-                              <div className={`badge ${result.generationType === 'ai' ? 'badge-secondary' : 'badge-accent'}`}>
-                                {result.generationType === 'ai' ? 'AI Generated' : 'Review'}
+          <Route path="/practice" element={
+            <div className="space-y-4">
+              {results.filter(r => r.generated).length === 0 ? (
+                <div className="alert">
+                  <span>No practice tests yet. Go to Generate to create one!</span>
+                </div>
+              ) : (
+                results
+                  .filter(r => r.generated)
+                  .sort((a, b) => new Date(b.uploadedAt || b.date) - new Date(a.uploadedAt || a.date))
+                  .map(result => (
+                    <div key={result.id}>
+                      {!result.taken ? (
+                        <div className="card bg-base-200 shadow-md">
+                          <div className="card-body">
+                            <div className="flex justify-between items-start">
+                              <div>
+                                <h3 className="card-title">{result.name}</h3>
+                                <p className="text-sm text-base-content/60">
+                                  {new Date(result.uploadedAt).toLocaleDateString('en-US', {
+                                    year: 'numeric',
+                                    month: 'short',
+                                    day: 'numeric'
+                                  })}
+                                </p>
+                                <p className="text-sm mt-2">
+                                  {result.data.reduce((sum, s) => sum + (s.items?.length || 0), 0)} questions
+                                </p>
+                              </div>
+                              <div className="flex gap-2">
+                                <div className="badge badge-primary">New</div>
+                                <div className={`badge ${
+                                  result.generationType === 'ai' ? 'badge-secondary' :
+                                  result.generationType === 'category' ? 'badge-info' : 'badge-accent'
+                                }`}>
+                                  {result.generationType === 'ai' ? 'AI Generated' :
+                                   result.generationType === 'category' ? 'Category Focus' : 'Review'}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                          <div className="card-actions justify-end mt-4">
-                            <button
-                              className="btn btn-ghost btn-sm text-error"
-                              onClick={() => handleDelete(result.id)}
-                            >
-                              Delete
-                            </button>
-                            <button
-                              className="btn btn-primary"
-                              onClick={() => handleTakeTest(result)}
-                            >
-                              Take Test
-                            </button>
+                            <div className="card-actions justify-end mt-4">
+                              <button
+                                className="btn btn-ghost btn-sm text-error"
+                                onClick={() => handleDelete(result.id)}
+                              >
+                                Delete
+                              </button>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => handleTakeTest(result)}
+                              >
+                                Take Test
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ) : (
-                      <TestResults
-                        result={result}
-                        onDelete={handleDelete}
-                        onRetake={handleRetakeTest}
-                      />
-                    )}
-                  </div>
-                ))
-            )}
-          </div>
-        )}
-
-        {activeTab === 'history' && (
-          <div className="space-y-4">
-            <div className="flex justify-end">
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={() => loadSampleData(true)}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
-                </svg>
-                Reload Sample Data
-              </button>
+                      ) : (
+                        <TestResults
+                          result={result}
+                          onDelete={handleDelete}
+                          onRetake={handleRetakeTest}
+                        />
+                      )}
+                    </div>
+                  ))
+              )}
             </div>
-            {results.filter(r => !r.generated).length === 0 ? (
-              <div className="alert">
-                <span>No uploaded tests yet. Go to Upload to add your test results!</span>
+          } />
+
+          <Route path="/history" element={
+            <div className="space-y-4">
+              <div className="flex justify-end">
+                <button
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => loadSampleData(true)}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                  </svg>
+                  Reload Sample Data
+                </button>
               </div>
-            ) : (
-              results
-                .filter(r => !r.generated)
-                .sort((a, b) => new Date(b.uploadedAt || b.date) - new Date(a.uploadedAt || a.date))
-                .map(result => (
-                  <TestResults
-                    key={result.id}
-                    result={result}
-                    onDelete={handleDelete}
-                  />
-                ))
-            )}
-          </div>
-        )}
+              {results.filter(r => !r.generated).length === 0 ? (
+                <div className="alert">
+                  <span>No uploaded tests yet. Go to Upload to add your test results!</span>
+                </div>
+              ) : (
+                results
+                  .filter(r => !r.generated)
+                  .sort((a, b) => new Date(b.uploadedAt || b.date) - new Date(a.uploadedAt || a.date))
+                  .map(result => (
+                    <TestResults
+                      key={result.id}
+                      result={result}
+                      onDelete={handleDelete}
+                    />
+                  ))
+              )}
+            </div>
+          } />
+        </Routes>
       </div>
 
       <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />

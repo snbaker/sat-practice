@@ -7,8 +7,11 @@ const SECTION_NAMES = {
   math: 'Math'
 }
 
-export default function Analysis({ results }) {
+export default function Analysis({ results, onPracticeCategory }) {
   const [expandedCategories, setExpandedCategories] = useState({})
+  const [source, setSource] = useState('uploaded') // 'uploaded' or 'generated' or 'all'
+  const [viewingQuestions, setViewingQuestions] = useState(null) // { key, filter: 'all' | 'correct' | 'incorrect', questions }
+  const [expandedQuestion, setExpandedQuestion] = useState(null)
 
   if (!results || results.length === 0) {
     return (
@@ -21,11 +24,18 @@ export default function Analysis({ results }) {
     )
   }
 
-  // Collect all questions from all results (only those with metadata)
-  const questionsBySection = { reading: [], math: [] }
-  let questionsWithoutMetadata = 0
+  // Filter results based on source selection
+  const filteredResults = results.filter(result => {
+    if (source === 'uploaded') return !result.generated
+    if (source === 'generated') return result.generated && result.taken
+    return true // 'all'
+  })
 
-  results.forEach(result => {
+  // Collect all questions from filtered results
+  const questionsBySection = { reading: [], math: [] }
+  const uncategorizedBySection = { reading: [], math: [] }
+
+  filteredResults.forEach(result => {
     const { data } = result
     if (!isRichFormat(data)) return
 
@@ -36,12 +46,14 @@ export default function Analysis({ results }) {
           if (item.metadata?.PRIMARY_CLASS_CD) {
             questionsBySection[sectionId].push(item)
           } else {
-            questionsWithoutMetadata++
+            uncategorizedBySection[sectionId].push(item)
           }
         })
       }
     })
   })
+
+  const totalUncategorized = uncategorizedBySection.reading.length + uncategorizedBySection.math.length
 
   // Build stats for a category level
   const buildCategoryStats = (questions, categoryKey) => {
@@ -138,6 +150,35 @@ export default function Analysis({ results }) {
                       style={{ width: `${pct}%` }}
                     />
                   </div>
+                  {level === 'PRIMARY_CLASS_CD' && (
+                    <div className="flex gap-1">
+                      <button
+                        className="btn btn-xs btn-ghost"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setViewingQuestions({
+                            key,
+                            title: displayName,
+                            filter: 'all',
+                            questions: data.questions
+                          })
+                        }}
+                      >
+                        Review
+                      </button>
+                      {onPracticeCategory && (
+                        <button
+                          className="btn btn-xs btn-primary"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onPracticeCategory(sectionId, category)
+                          }}
+                        >
+                          Practice
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -171,22 +212,49 @@ export default function Analysis({ results }) {
     )
   }
 
+  const uploadedCount = results.filter(r => !r.generated).length
+  const generatedCount = results.filter(r => r.generated && r.taken).length
+
   return (
     <div className="space-y-6">
-      {questionsWithoutMetadata > 0 && (
-        <div className="alert alert-warning">
-          <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <span>{questionsWithoutMetadata} questions without category data are excluded from this analysis.</span>
+      {/* Source Toggle */}
+      <div className="flex justify-between items-center">
+        <div className="join">
+          <button
+            className={`btn btn-sm join-item ${source === 'uploaded' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setSource('uploaded')}
+          >
+            Uploaded Tests ({uploadedCount})
+          </button>
+          <button
+            className={`btn btn-sm join-item ${source === 'generated' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setSource('generated')}
+            disabled={generatedCount === 0}
+          >
+            Practice Tests ({generatedCount})
+          </button>
+          <button
+            className={`btn btn-sm join-item ${source === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+            onClick={() => setSource('all')}
+          >
+            All
+          </button>
         </div>
-      )}
-      {Object.entries(questionsBySection).map(([sectionId, questions]) => {
-        if (questions.length === 0) return null
+      </div>
 
-        const totalCorrect = questions.filter(q => q.answer?.correct).length
-        const totalQuestions = questions.length
+      {Object.entries(questionsBySection).map(([sectionId, questions]) => {
+        const uncategorized = uncategorizedBySection[sectionId] || []
+        const allQuestions = [...questions, ...uncategorized]
+
+        if (allQuestions.length === 0) return null
+
+        const totalCorrect = allQuestions.filter(q => q.answer?.correct).length
+        const totalQuestions = allQuestions.length
         const pct = Math.round((totalCorrect / totalQuestions) * 100)
+
+        const uncatCorrect = uncategorized.filter(q => q.answer?.correct).length
+        const uncatTotal = uncategorized.length
+        const uncatPct = uncatTotal > 0 ? Math.round((uncatCorrect / uncatTotal) * 100) : 0
 
         return (
           <div key={sectionId} className="card bg-base-200 shadow-md">
@@ -203,20 +271,207 @@ export default function Analysis({ results }) {
                 </div>
               </div>
 
-              <div className="text-sm text-base-content/60 mb-2">
-                Sorted by accuracy (weakest areas first)
-              </div>
+              {questions.length > 0 && (
+                <>
+                  <div className="text-sm text-base-content/60 mb-2">
+                    Sorted by accuracy (weakest areas first)
+                  </div>
 
-              {renderCategoryStats(
-                buildCategoryStats(questions, 'PRIMARY_CLASS_CD'),
-                'PRIMARY_CLASS_CD',
-                sectionId,
-                sectionId
+                  {renderCategoryStats(
+                    buildCategoryStats(questions, 'PRIMARY_CLASS_CD'),
+                    'PRIMARY_CLASS_CD',
+                    sectionId,
+                    sectionId
+                  )}
+                </>
+              )}
+
+              {uncatTotal > 0 && (
+                <div className="mt-4 pt-4 border-t border-base-300">
+                  <div className="bg-base-100 rounded p-3 flex justify-between items-center">
+                    <div>
+                      <span className="font-medium text-base-content/70">Without Category Data</span>
+                      <span className="text-xs text-base-content/50 ml-2">({uncatTotal} questions)</span>
+                    </div>
+                    <div className="flex items-center gap-4">
+                      <div className="flex gap-2 text-sm">
+                        <span className="text-success">{uncatCorrect} correct</span>
+                        <span className="text-base-content/40">|</span>
+                        <span className="text-error">{uncatTotal - uncatCorrect} wrong</span>
+                      </div>
+                      <div className={`font-bold ${getScoreColor(uncatCorrect, uncatTotal)}`}>
+                        {uncatPct}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
           </div>
         )
       })}
+
+      {/* Question Review Modal */}
+      {viewingQuestions && (
+        <dialog className="modal modal-open">
+          <div className="modal-box max-w-4xl max-h-[90vh]">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg">{viewingQuestions.title}</h3>
+              <button
+                className="btn btn-sm btn-ghost"
+                onClick={() => {
+                  setViewingQuestions(null)
+                  setExpandedQuestion(null)
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Filter Buttons */}
+            <div className="join mb-4">
+              <button
+                className={`btn btn-sm join-item ${viewingQuestions.filter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewingQuestions({ ...viewingQuestions, filter: 'all' })}
+              >
+                All ({viewingQuestions.questions.length})
+              </button>
+              <button
+                className={`btn btn-sm join-item ${viewingQuestions.filter === 'correct' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewingQuestions({ ...viewingQuestions, filter: 'correct' })}
+              >
+                Correct ({viewingQuestions.questions.filter(q => q.answer?.correct).length})
+              </button>
+              <button
+                className={`btn btn-sm join-item ${viewingQuestions.filter === 'incorrect' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setViewingQuestions({ ...viewingQuestions, filter: 'incorrect' })}
+              >
+                Incorrect ({viewingQuestions.questions.filter(q => !q.answer?.correct).length})
+              </button>
+            </div>
+
+            {/* Questions List */}
+            <div className="overflow-y-auto max-h-[60vh] space-y-2">
+              {viewingQuestions.questions
+                .filter(q => {
+                  if (viewingQuestions.filter === 'correct') return q.answer?.correct
+                  if (viewingQuestions.filter === 'incorrect') return !q.answer?.correct
+                  return true
+                })
+                .map((item, idx) => {
+                  const qKey = `${viewingQuestions.key}-${idx}`
+                  const isExpanded = expandedQuestion === qKey
+                  const isCorrect = item.answer?.correct
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg overflow-hidden ${isCorrect ? 'bg-success/10' : 'bg-error/10'}`}
+                    >
+                      <div
+                        className="p-3 flex items-start gap-3 cursor-pointer hover:bg-base-300/30"
+                        onClick={() => setExpandedQuestion(isExpanded ? null : qKey)}
+                      >
+                        <div className={`badge ${isCorrect ? 'badge-success' : 'badge-error'} badge-sm mt-0.5`}>
+                          {isCorrect ? '✓' : '✗'}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div
+                            className={`text-sm [&_math]:inline ${!isExpanded ? 'line-clamp-2' : ''}`}
+                            dangerouslySetInnerHTML={{ __html: item.prompt }}
+                          />
+                          {!isExpanded && (
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-base-content/60">
+                              {item.answer?.response && (
+                                <span>Your answer: <span className={`font-medium ${isCorrect ? 'text-success' : 'text-error'}`}>{item.answer.response}</span></span>
+                              )}
+                              {item.answer?.correctChoice && (
+                                <span>Correct: <span className="font-medium text-success">{item.answer.correctChoice}</span></span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <svg
+                          className={`w-4 h-4 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                      </div>
+
+                      {isExpanded && (
+                        <div className="px-3 pb-3 space-y-3 ml-8">
+                          {item.passage?.body && (
+                            <div className="bg-base-200 p-3 rounded text-sm">
+                              <div className="text-xs font-medium text-base-content/60 mb-1">Passage</div>
+                              <div
+                                className="[&_math]:inline prose prose-sm max-w-none"
+                                dangerouslySetInnerHTML={{ __html: item.passage.body }}
+                              />
+                            </div>
+                          )}
+
+                          {item.answer?.choices && (
+                            <div>
+                              <div className="text-xs font-medium text-base-content/60 mb-1">Answer Choices</div>
+                              <div className="space-y-1">
+                                {Object.entries(item.answer.choices).map(([choiceKey, value]) => (
+                                  <div
+                                    key={choiceKey}
+                                    className={`text-sm p-2 rounded flex gap-2 ${
+                                      choiceKey === item.answer.correctChoice
+                                        ? 'bg-success/20 text-success'
+                                        : choiceKey === item.answer.response && !isCorrect
+                                        ? 'bg-error/20 text-error'
+                                        : 'bg-base-200'
+                                    }`}
+                                  >
+                                    <span className="font-medium">{choiceKey}.</span>
+                                    <span dangerouslySetInnerHTML={{ __html: value?.body || value }} />
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {item.answer?.rationale && (
+                            <div className="bg-base-200 p-3 rounded">
+                              <div className="text-xs font-medium text-base-content/60 mb-1">Explanation</div>
+                              <div
+                                className="text-sm [&_math]:inline [&_p]:inline"
+                                dangerouslySetInnerHTML={{ __html: item.answer.rationale }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+            </div>
+
+            <div className="modal-action">
+              <button
+                className="btn"
+                onClick={() => {
+                  setViewingQuestions(null)
+                  setExpandedQuestion(null)
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+          <form method="dialog" className="modal-backdrop">
+            <button onClick={() => {
+              setViewingQuestions(null)
+              setExpandedQuestion(null)
+            }}>close</button>
+          </form>
+        </dialog>
+      )}
     </div>
   )
 }
