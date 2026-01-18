@@ -5,7 +5,10 @@
       "Bash(npm run build:*)",
       "WebFetch(domain:platform.openai.com)",
       "WebSearch",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(for file in /Users/stephenbaker/Development/sat-practice/public/data/test-*.json)",
+      "Bash(do)",
+      "Bash(done)"
     ]
   }
 }

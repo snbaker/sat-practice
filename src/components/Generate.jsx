@@ -70,6 +70,7 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
         uploadedAt: new Date().toISOString(),
         name: `AI Practice - ${new Date().toLocaleDateString()}`,
         generated: true,
+        generationType: 'ai',
         taken: false
       }
 
@@ -160,6 +161,7 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
       uploadedAt: new Date().toISOString(),
       name: `Review Practice - ${new Date().toLocaleDateString()}`,
       generated: true,
+      generationType: 'review',
       taken: false
     }
 
@@ -185,11 +187,9 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
           <h2 className="card-title">Generate Practice Test</h2>
 
           {/* Mode Selection */}
-          <div className="form-control">
-            <label className="label">
-              <span className="label-text font-medium">Source</span>
-            </label>
-            <div className="join">
+          <div>
+            <div className="text-sm font-medium mb-2">Source</div>
+            <div className="join w-fit">
               <button
                 className={`btn join-item ${mode === 'ai' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setMode('ai')}
@@ -203,7 +203,7 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
                 Review Past Questions
               </button>
             </div>
-            <p className="text-xs text-base-content/60 mt-1">
+            <p className="text-xs text-base-content/60 mt-2">
               {mode === 'ai'
                 ? 'Create new questions using AI based on your weak areas'
                 : `Pull actual questions from your uploaded tests (${totalAvailable} available)`
@@ -233,11 +233,9 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
           )}
 
           {/* Section Selection */}
-          <div className="form-control mt-4">
-            <label className="label">
-              <span className="label-text font-medium">Section</span>
-            </label>
-            <div className="join">
+          <div className="mt-4">
+            <div className="text-sm font-medium mb-2">Section</div>
+            <div className="join w-fit">
               <button
                 className={`btn join-item ${section === 'reading' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setSection('reading')}
@@ -260,11 +258,9 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
           </div>
 
           {/* Question Count */}
-          <div className="form-control mt-4">
-            <label className="label">
-              <span className="label-text font-medium">Number of Questions</span>
-            </label>
-            <div className="join">
+          <div className="mt-4">
+            <div className="text-sm font-medium mb-2">Number of Questions</div>
+            <div className="join w-fit">
               {questionCounts.map(count => (
                 <button
                   key={count}
@@ -278,11 +274,11 @@ export default function Generate({ results, onTestGenerated, onOpenSettings }) {
           </div>
 
           {/* Wrong/Correct Ratio */}
-          <div className="form-control mt-4">
-            <label className="label">
-              <span className="label-text font-medium">Question Mix</span>
-              <span className="label-text-alt">{wrongRatio}% wrong / {100 - wrongRatio}% correct</span>
-            </label>
+          <div className="mt-4">
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-medium">Question Mix</span>
+              <span className="text-sm text-base-content/60">{wrongRatio}% wrong / {100 - wrongRatio}% correct</span>
+            </div>
             <input
               type="range"
               min="0"

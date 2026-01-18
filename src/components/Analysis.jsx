@@ -21,8 +21,9 @@ export default function Analysis({ results }) {
     )
   }
 
-  // Collect all questions from all results
+  // Collect all questions from all results (only those with metadata)
   const questionsBySection = { reading: [], math: [] }
+  let questionsWithoutMetadata = 0
 
   results.forEach(result => {
     const { data } = result
@@ -32,7 +33,11 @@ export default function Analysis({ results }) {
       const sectionId = section.id
       if (questionsBySection[sectionId]) {
         section.items?.forEach(item => {
-          questionsBySection[sectionId].push(item)
+          if (item.metadata?.PRIMARY_CLASS_CD) {
+            questionsBySection[sectionId].push(item)
+          } else {
+            questionsWithoutMetadata++
+          }
         })
       }
     })
@@ -153,8 +158,29 @@ export default function Analysis({ results }) {
     )
   }
 
+  const totalQuestions = questionsBySection.reading.length + questionsBySection.math.length
+
+  if (totalQuestions === 0) {
+    return (
+      <div className="alert alert-info">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span>No questions with category data available for analysis. Tests 6-9 have detailed category breakdowns.</span>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-6">
+      {questionsWithoutMetadata > 0 && (
+        <div className="alert alert-warning">
+          <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <span>{questionsWithoutMetadata} questions without category data are excluded from this analysis.</span>
+        </div>
+      )}
       {Object.entries(questionsBySection).map(([sectionId, questions]) => {
         if (questions.length === 0) return null
 
