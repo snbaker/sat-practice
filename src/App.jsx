@@ -354,13 +354,10 @@ function App() {
   }
 
   const handleTestGenerated = async (newResult) => {
-    // Save to local state (for backward compatibility)
-    setResults(prev => [...prev, newResult])
-    
     // Also save to Supabase if authenticated
     if (user) {
       try {
-        await createTest({
+        const supabaseTest = await createTest({
           name: newResult.name,
           generated: newResult.generated || false,
           generationType: newResult.generationType,
@@ -369,11 +366,20 @@ function App() {
           isPublic: false // Private by default
         })
         console.log('Test saved to Supabase')
+        
+        // Update result with Supabase metadata so Share button appears
+        newResult._supabaseTestId = supabaseTest.id
+        newResult._createdBy = supabaseTest.created_by
+        newResult._isPublic = supabaseTest.is_public || false
+        newResult._sharedWith = supabaseTest.shared_with || []
       } catch (error) {
         console.error('Failed to save test to Supabase:', error)
         // Continue anyway - test is saved locally
       }
     }
+    
+    // Save to local state (for backward compatibility)
+    setResults(prev => [...prev, newResult])
     
     navigate('/practice')
   }
