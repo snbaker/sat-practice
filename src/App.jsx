@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
 import DropZone from './components/DropZone'
 import TestResults from './components/TestResults'
@@ -8,7 +8,10 @@ import Generate from './components/Generate'
 import Settings from './components/Settings'
 import TakeTest from './components/TakeTest'
 import QuestionBank from './components/QuestionBank'
+import Auth from './components/Auth'
+import ShareTest from './components/ShareTest'
 import { getTopicName } from './utils/topicMappings'
+import { getCurrentUser, onAuthStateChange, signOut as supabaseSignOut, createTest, createAttempt, getMyTests, getMyAttempts, migrateTestsFromData } from './services/supabase'
 
 const STORAGE_KEY = 'sat-practice-results'
 const THEME_KEY = 'sat-practice-theme'
@@ -23,6 +26,8 @@ function App() {
   const [theme, setTheme] = useState(() => {
     return localStorage.getItem(THEME_KEY) || 'light'
   })
+  const [user, setUser] = useState(null)
+  const [authLoading, setAuthLoading] = useState(true)
 
   // Get current tab from path
   const getActiveTab = () => {
@@ -31,23 +36,154 @@ function App() {
   }
   const activeTab = getActiveTab()
 
+  // Check authentication status and migrate sample data on first sign-in
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored) {
+    const checkAuth = async () => {
       try {
-        const parsed = JSON.parse(stored)
-        if (parsed.length > 0) {
-          setResults(parsed)
-          setInitialized(true)
-          return
+        const currentUser = await getCurrentUser()
+        setUser(currentUser)
+        
+        // Check for new sample data to migrate (runs on every load to catch new files)
+        if (currentUser) {
+          // Always check for new files (migration is smart - only migrates new ones)
+          try {
+            const result = await migrateTestsFromData()
+            if (result.successCount > 0) {
+              console.log(`Migrated ${result.successCount} new test(s) from public/data/`)
+              // Reload data to show new tests
+              window.location.reload()
+            }
+          } catch (error) {
+            console.error('Migration check failed:', error)
+            // Continue anyway
+          }
         }
       } catch (e) {
-        console.error('Failed to load stored results:', e)
+        console.log('Not authenticated')
+      } finally {
+        setAuthLoading(false)
       }
     }
-    // Load sample data if no results
-    loadSampleData().then(() => setInitialized(true))
+    checkAuth()
+
+    // Listen for auth changes
+    const { data: { subscription } } = onAuthStateChange(async (event, session) => {
+      if (event === 'SIGNED_IN' && session?.user) {
+        setUser(session.user)
+        handleAuthSuccess(session.user)
+        
+        // Check for new sample data to migrate on sign-in
+        console.log('Checking for new test files to migrate...')
+        try {
+          const result = await migrateTestsFromData()
+          if (result.successCount > 0) {
+            console.log(`Migrated ${result.successCount} new test(s) from public/data/`)
+            // Reload data to show new tests
+            setTimeout(() => window.location.reload(), 1000)
+          }
+        } catch (error) {
+          console.error('Migration failed:', error)
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null)
+      }
+    })
+
+    return () => subscription.unsubscribe()
   }, [])
+
+  const handleAuthSuccess = (authenticatedUser) => {
+    setUser(authenticatedUser)
+  }
+
+  const handleSignOut = async () => {
+    try {
+      await supabaseSignOut()
+      setUser(null)
+      navigate('/')
+    } catch (e) {
+      console.error('Sign out error:', e)
+    }
+  }
+
+  // Load data from Supabase or localStorage (for backward compatibility)
+  useEffect(() => {
+    const loadData = async () => {
+      if (user) {
+        // Load from Supabase
+        try {
+          const tests = await getMyTests()
+          const attempts = await getMyAttempts()
+          
+          // Convert to legacy format for now (for compatibility with existing components)
+          // Deduplicate by test name (keep the most recent one if duplicates exist)
+          const testMap = new Map()
+          tests.forEach(test => {
+            const existing = testMap.get(test.name)
+            if (!existing || new Date(test.created_at) > new Date(existing.created_at)) {
+              testMap.set(test.name, test)
+            }
+          })
+          
+          const uniqueTests = Array.from(testMap.values())
+          const legacyResults = uniqueTests.map(test => {
+            const testAttempts = attempts.filter(a => a.test_id === test.id)
+            const latestAttempt = testAttempts[0] // Most recent
+            
+            return {
+              id: test.id,
+              name: test.name,
+              uploadedAt: test.created_at,
+              generated: test.generated,
+              generationType: test.generation_type,
+              categoryCode: test.category_code,
+              data: test.sections,
+              taken: !!latestAttempt,
+              completedAt: latestAttempt?.completed_at,
+              // Store Supabase IDs and sharing info for future reference
+              _supabaseTestId: test.id,
+              _supabaseAttempts: testAttempts,
+              _isPublic: test.is_public,
+              _sharedWith: test.shared_with,
+              _createdBy: test.created_by
+            }
+          })
+          
+          setResults(legacyResults)
+          setInitialized(true)
+        } catch (error) {
+          console.error('Failed to load from Supabase:', error)
+          // Fallback to localStorage
+          loadFromLocalStorage()
+        }
+      } else {
+        // Not authenticated - load from localStorage (backward compatibility)
+        loadFromLocalStorage()
+      }
+    }
+    
+    const loadFromLocalStorage = () => {
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          if (parsed.length > 0) {
+            setResults(parsed)
+            setInitialized(true)
+            return
+          }
+        } catch (e) {
+          console.error('Failed to load stored results:', e)
+        }
+      }
+      // Load sample data if no results
+      loadSampleData().then(() => {
+        setInitialized(true)
+      })
+    }
+    
+    loadData()
+  }, [user])
 
   const loadSampleData = async (merge = false) => {
     try {
@@ -84,11 +220,14 @@ function App() {
     }
   }
 
+
+  // Save to localStorage only if not authenticated (for backward compatibility)
+  // If authenticated, data is in Supabase
   useEffect(() => {
-    if (initialized) {
+    if (initialized && !user) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(results))
     }
-  }, [results, initialized])
+  }, [results, initialized, user])
 
   useEffect(() => {
     localStorage.setItem(THEME_KEY, theme)
@@ -118,8 +257,28 @@ function App() {
     }
   }
 
-  const handleTestGenerated = (newResult) => {
+  const handleTestGenerated = async (newResult) => {
+    // Save to local state (for backward compatibility)
     setResults(prev => [...prev, newResult])
+    
+    // Also save to Supabase if authenticated
+    if (user) {
+      try {
+        await createTest({
+          name: newResult.name,
+          generated: newResult.generated || false,
+          generationType: newResult.generationType,
+          categoryCode: newResult.categoryCode,
+          sections: newResult.data || [],
+          isPublic: false // Private by default
+        })
+        console.log('Test saved to Supabase')
+      } catch (error) {
+        console.error('Failed to save test to Supabase:', error)
+        // Continue anyway - test is saved locally
+      }
+    }
+    
     navigate('/practice')
   }
 
@@ -127,8 +286,39 @@ function App() {
     setTakingTest(result)
   }
 
-  const handleTestComplete = (updatedResult) => {
+  const handleTestComplete = async (updatedResult) => {
+    // Update local state
     setResults(prev => prev.map(r => r.id === updatedResult.id ? updatedResult : r))
+    
+    // Also save attempt to Supabase if authenticated
+    if (user) {
+      try {
+        // Extract responses from the updated result
+        const responses = {}
+        updatedResult.data?.forEach(section => {
+          section.items?.forEach(item => {
+            if (item.questionId && item.answer?.response !== undefined) {
+              responses[item.questionId] = item.answer.response
+            }
+          })
+        })
+        
+        // Find or create test in Supabase first
+        // For now, we'll try to find by matching the test structure
+        // In a full implementation, we'd track the Supabase test ID
+        // For now, create attempt with a reference - we'll need to store test ID when creating
+        
+        // Note: This is a simplified version. In production, you'd want to:
+        // 1. Store the Supabase test ID when creating the test
+        // 2. Use that ID when creating attempts
+        
+        console.log('Attempt data ready for Supabase:', { responses })
+        // TODO: Create attempt once we have test ID mapping
+      } catch (error) {
+        console.error('Failed to save attempt to Supabase:', error)
+        // Continue anyway - attempt is saved locally
+      }
+    }
   }
 
   const handleCancelTest = () => {
@@ -200,36 +390,78 @@ function App() {
         <div className="flex-1">
           <span className="text-xl font-bold px-4">SAT Practice Tracker</span>
         </div>
-        <div className="flex-none flex gap-2">
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={toggleTheme}
-            title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
-          >
-            {theme === 'light' ? (
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
-              </svg>
-            ) : (
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
-              </svg>
-            )}
-          </button>
-          <button
-            className="btn btn-ghost btn-sm"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-            </svg>
-          </button>
-          {results.length > 0 && (
-            <button className="btn btn-ghost btn-sm text-error" onClick={handleClearAll}>
-              Clear All
-            </button>
-          )}
+        <div className="flex-none flex gap-2 items-center">
+          {/* User Menu Dropdown */}
+          {!authLoading && user ? (
+            <div className="dropdown dropdown-end">
+              <div tabIndex={0} role="button" className="btn btn-ghost btn-sm">
+                <div className="flex items-center gap-2">
+                  <div className="avatar placeholder">
+                    <div className="bg-neutral text-neutral-content rounded-full w-8">
+                      <span className="text-xs">{user.email?.[0]?.toUpperCase() || 'U'}</span>
+                    </div>
+                  </div>
+                  <span className="hidden sm:inline text-sm">{user.email}</span>
+                </div>
+              </div>
+              <ul tabIndex={0} className="dropdown-content menu bg-base-100 rounded-box z-[1] w-52 p-2 shadow">
+                <li className="menu-title">
+                  <span>{user.email}</span>
+                </li>
+                <li>
+                  <a onClick={toggleTheme}>
+                    {theme === 'light' ? (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M21.752 15.002A9.72 9.72 0 0 1 18 15.75c-5.385 0-9.75-4.365-9.75-9.75 0-1.33.266-2.597.748-3.752A9.753 9.753 0 0 0 3 11.25C3 16.635 7.365 21 12.75 21a9.753 9.753 0 0 0 9.002-5.998Z" />
+                        </svg>
+                        Dark Mode
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v2.25m6.364.386-1.591 1.591M21 12h-2.25m-.386 6.364-1.591-1.591M12 18.75V21m-4.773-4.227-1.591 1.591M5.25 12H3m4.227-4.773L5.636 5.636M15.75 12a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0Z" />
+                        </svg>
+                        Light Mode
+                      </>
+                    )}
+                  </a>
+                </li>
+                <li>
+                  <a onClick={() => setSettingsOpen(true)}>
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                    Settings
+                  </a>
+                </li>
+                {results.length > 0 && (
+                  <li>
+                    <a onClick={handleClearAll} className="text-error">
+                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                      </svg>
+                      Clear All
+                    </a>
+                  </li>
+                )}
+                <li><div className="divider my-1"></div></li>
+                <li>
+                  <a onClick={handleSignOut} className="text-error">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15M12 9l-3 3m0 0 3 3m-3-3h12.75" />
+                    </svg>
+                    Sign Out
+                  </a>
+                </li>
+              </ul>
+            </div>
+          ) : !authLoading ? (
+            <Link to="/auth" className="btn btn-primary btn-sm">
+              Sign In
+            </Link>
+          ) : null}
         </div>
       </div>
 
@@ -405,6 +637,49 @@ function App() {
                               </div>
                             </div>
                             <div className="card-actions justify-end mt-4">
+                              {user && result._createdBy === user.id && (
+                                <ShareTest 
+                                  test={{
+                                    id: result._supabaseTestId || result.id,
+                                    name: result.name,
+                                    is_public: result._isPublic || false
+                                  }}
+                                  onUpdate={async () => {
+                                    // Reload data after sharing update
+                                    const tests = await getMyTests()
+                                    const attempts = await getMyAttempts()
+                                    const testMap = new Map()
+                                    tests.forEach(test => {
+                                      const existing = testMap.get(test.name)
+                                      if (!existing || new Date(test.created_at) > new Date(existing.created_at)) {
+                                        testMap.set(test.name, test)
+                                      }
+                                    })
+                                    const uniqueTests = Array.from(testMap.values())
+                                    const legacyResults = uniqueTests.map(test => {
+                                      const testAttempts = attempts.filter(a => a.test_id === test.id)
+                                      const latestAttempt = testAttempts[0]
+                                      return {
+                                        id: test.id,
+                                        name: test.name,
+                                        uploadedAt: test.created_at,
+                                        generated: test.generated,
+                                        generationType: test.generation_type,
+                                        categoryCode: test.category_code,
+                                        data: test.sections,
+                                        taken: !!latestAttempt,
+                                        completedAt: latestAttempt?.completed_at,
+                                        _supabaseTestId: test.id,
+                                        _supabaseAttempts: testAttempts,
+                                        _isPublic: test.is_public,
+                                        _sharedWith: test.shared_with,
+                                        _createdBy: test.created_by
+                                      }
+                                    })
+                                    setResults(legacyResults)
+                                  }}
+                                />
+                              )}
                               <button
                                 className="btn btn-ghost btn-sm text-error"
                                 onClick={() => handleDelete(result.id)}
@@ -466,6 +741,12 @@ function App() {
           } />
 
           <Route path="/bank" element={<QuestionBank />} />
+          
+          <Route path="/auth" element={
+            <div className="py-8">
+              <Auth onAuthSuccess={handleAuthSuccess} />
+            </div>
+          } />
         </Routes>
       </div>
 

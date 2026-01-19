@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import { hasApiKey, generateTest } from '../services/openai'
 import { getTopicName } from '../utils/topicMappings'
+import { getQuestions, getCurrentUser } from '../services/supabase'
 
 export default function Generate({ results, onTestGenerated, onOpenSettings, categoryFilter, onClearCategoryFilter }) {
   const [mode, setMode] = useState('review') // 'ai', 'review', or 'bank'
@@ -22,33 +23,57 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
   // Question bank state
   const [bankQuestions, setBankQuestions] = useState([])
   const [bankLoading, setBankLoading] = useState(true)
+  const [useSupabase, setUseSupabase] = useState(false)
+
+  // Check if Supabase is available
+  useEffect(() => {
+    const checkSupabase = async () => {
+      try {
+        const user = await getCurrentUser()
+        const hasSupabaseUrl = import.meta.env.VITE_SUPABASE_URL
+        setUseSupabase(!!(user && hasSupabaseUrl))
+      } catch (e) {
+        setUseSupabase(false)
+      }
+    }
+    checkSupabase()
+  }, [])
 
   // Load question bank
   useEffect(() => {
     const loadBank = async () => {
       try {
-        const response = await fetch('/bank/question-bank.json')
-        if (!response.ok) {
-          setBankQuestions([])
-          return
+        if (useSupabase) {
+          // Load from Supabase
+          const data = await getQuestions()
+          setBankQuestions(data)
+        } else {
+          // Fallback to local file
+          const response = await fetch('/bank/question-bank.json')
+          if (!response.ok) {
+            setBankQuestions([])
+            return
+          }
+          const data = await response.json()
+          const allQuestions = data.flatMap(section =>
+            (section.items || []).map(item => ({
+              ...item,
+              sectionId: section.id
+            }))
+          )
+          setBankQuestions(allQuestions)
         }
-        const data = await response.json()
-        const allQuestions = data.flatMap(section =>
-          (section.items || []).map(item => ({
-            ...item,
-            sectionId: section.id
-          }))
-        )
-        setBankQuestions(allQuestions)
       } catch (e) {
-        console.log('No question bank found')
+        console.log('No question bank found:', e)
         setBankQuestions([])
       } finally {
         setBankLoading(false)
       }
     }
-    loadBank()
-  }, [])
+    if (useSupabase !== null) {
+      loadBank()
+    }
+  }, [useSupabase])
 
   const questionCounts = [1, 5, 10, 20]
 

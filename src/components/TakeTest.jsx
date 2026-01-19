@@ -511,33 +511,41 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
         <div className="card bg-base-200 shadow-md">
           <div className="card-body">
             {renderContent(currentQuestion.passage) && (
-              <div className="bg-base-100 p-4 rounded-lg mb-4 text-sm">
+              <div className="bg-base-100 border border-base-300 p-5 rounded-lg mb-6 text-sm leading-relaxed">
                 <div
-                  className="[&_math]:inline prose prose-sm max-w-none"
+                  className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle prose prose-sm max-w-none"
                   dangerouslySetInnerHTML={{ __html: renderContent(currentQuestion.passage) }}
                 />
               </div>
             )}
 
-            <div
-              className="text-base mb-6 [&_math]:inline"
-              dangerouslySetInnerHTML={{ __html: currentQuestion.prompt }}
-            />
+            <div className="bg-base-100 border border-base-300 p-5 rounded-lg mb-6">
+              <div
+                className="text-lg leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle [&_p]:mb-2 [&_p]:last:mb-0"
+                dangerouslySetInnerHTML={{ __html: currentQuestion.prompt }}
+              />
+            </div>
 
             {currentQuestion.answer?.choices && (
               <div className="space-y-3">
+                <div className="text-sm font-medium text-base-content/70 mb-2">Select your answer:</div>
                 {Object.entries(currentQuestion.answer.choices).map(([choiceKey, value]) => (
                   <button
                     key={choiceKey}
-                    className={`w-full text-left p-4 rounded-lg flex gap-3 transition-colors ${
+                    className={`w-full text-left p-4 rounded-lg border-2 flex gap-3 transition-all ${
                       selectedAnswer === choiceKey
-                        ? 'bg-primary text-primary-content'
-                        : 'bg-base-100 hover:bg-base-300'
+                        ? 'bg-primary text-primary-content border-primary shadow-md'
+                        : 'bg-base-100 hover:bg-base-200 border-base-300 hover:border-base-400'
                     }`}
                     onClick={() => handleSelectAnswer(currentQuestion.globalKey, choiceKey)}
                   >
-                    <span className="font-bold text-lg">{choiceKey}.</span>
-                    <span className="flex-1" dangerouslySetInnerHTML={{ __html: renderContent(value) }} />
+                    <span className={`font-bold text-lg shrink-0 ${selectedAnswer === choiceKey ? 'text-primary-content' : 'text-primary'}`}>
+                      {choiceKey}.
+                    </span>
+                    <span 
+                      className={`flex-1 leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle ${selectedAnswer === choiceKey ? 'text-primary-content' : ''}`}
+                      dangerouslySetInnerHTML={{ __html: renderContent(value) }} 
+                    />
                   </button>
                 ))}
               </div>

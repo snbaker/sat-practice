@@ -78,6 +78,7 @@ export default function Settings({ isOpen, onClose }) {
           )}
         </div>
 
+
         {saved && (
           <div className="alert alert-success mt-4">
             <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
@@ -89,18 +90,16 @@ export default function Settings({ isOpen, onClose }) {
 
         <div className="modal-action">
           {!hasEnvKey && apiKey && (
-            <button className="btn btn-ghost text-error" onClick={handleClear}>
-              Clear Key
+            <button className="btn btn-ghost text-error btn-sm" onClick={handleClear}>
+              Clear OpenAI
             </button>
           )}
           <button className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          {!hasEnvKey && (
-            <button className="btn btn-primary" onClick={handleSave}>
-              Save
-            </button>
-          )}
+          <button className="btn btn-primary" onClick={handleSave}>
+            Save
+          </button>
         </div>
       </div>
       <form method="dialog" className="modal-backdrop">

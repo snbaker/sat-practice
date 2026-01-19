@@ -1,42 +1,75 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getTopicName } from '../utils/topicMappings'
+import { getQuestions, getCurrentUser } from '../services/supabase'
 
 export default function QuestionBank() {
   const [questions, setQuestions] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [expandedQuestion, setExpandedQuestion] = useState(null)
+  const [useSupabase, setUseSupabase] = useState(false)
 
   // Filters
   const [sectionFilter, setSectionFilter] = useState('all')
   const [domainFilter, setDomainFilter] = useState('all')
   const [difficultyFilter, setDifficultyFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
+  
+  // Pagination
+  const [currentPage, setCurrentPage] = useState(1)
+  const [itemsPerPage, setItemsPerPage] = useState(() => {
+    const saved = localStorage.getItem('sat-practice-questionBankItemsPerPage')
+    return saved ? parseInt(saved, 10) : 25
+  })
+
+  // Check if user is authenticated and Supabase is available
+  useEffect(() => {
+    const checkSupabase = async () => {
+      try {
+        const user = await getCurrentUser()
+        const hasSupabaseUrl = import.meta.env.VITE_SUPABASE_URL
+        setUseSupabase(!!(user && hasSupabaseUrl))
+      } catch (e) {
+        setUseSupabase(false)
+      }
+    }
+    checkSupabase()
+  }, [])
 
   // Load bank questions
   useEffect(() => {
     const loadBank = async () => {
       try {
-        const response = await fetch('/bank/question-bank.json')
-        if (!response.ok) throw new Error('Failed to load question bank')
-        const data = await response.json()
+        if (useSupabase) {
+          // Load from Supabase
+          const data = await getQuestions()
+          setQuestions(data)
+        } else {
+          // Fallback to local file
+          const response = await fetch('/bank/question-bank.json')
+          if (!response.ok) throw new Error('Failed to load question bank')
+          const data = await response.json()
 
-        // Flatten questions from all sections
-        const allQuestions = data.flatMap(section =>
-          (section.items || []).map(item => ({
-            ...item,
-            sectionId: section.id
-          }))
-        )
-        setQuestions(allQuestions)
+          // Flatten questions from all sections
+          const allQuestions = data.flatMap(section =>
+            (section.items || []).map(item => ({
+              ...item,
+              sectionId: section.id
+            }))
+          )
+          setQuestions(allQuestions)
+        }
       } catch (e) {
         setError(e.message)
+        console.error('Error loading questions:', e)
       } finally {
         setLoading(false)
       }
     }
-    loadBank()
-  }, [])
+    if (useSupabase !== null) {
+      loadBank()
+    }
+  }, [useSupabase])
 
   // Get unique filter options
   const filterOptions = useMemo(() => {
@@ -85,6 +118,22 @@ export default function QuestionBank() {
     })
   }, [questions, sectionFilter, domainFilter, difficultyFilter, searchQuery])
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [sectionFilter, domainFilter, difficultyFilter, searchQuery, itemsPerPage])
+
+  // Save items per page preference
+  useEffect(() => {
+    localStorage.setItem('sat-practice-questionBankItemsPerPage', itemsPerPage.toString())
+  }, [itemsPerPage])
+
+  // Pagination calculations
+  const totalPages = Math.ceil(filteredQuestions.length / itemsPerPage)
+  const startIndex = (currentPage - 1) * itemsPerPage
+  const endIndex = startIndex + itemsPerPage
+  const paginatedQuestions = filteredQuestions.slice(startIndex, endIndex)
+
   const renderContent = (value) => {
     if (!value) return null
     if (typeof value === 'string') return value.trim() || null
@@ -103,7 +152,7 @@ export default function QuestionBank() {
       }
     }, 100)
     return () => clearTimeout(timer)
-  }, [filteredQuestions, expandedQuestion])
+  }, [paginatedQuestions, expandedQuestion])
 
   if (loading) {
     return (
@@ -212,14 +261,78 @@ export default function QuestionBank() {
         </div>
       </div>
 
-      {/* Results count */}
-      <div className="text-sm text-base-content/60">
-        Showing {filteredQuestions.length} of {questions.length} questions
+      {/* Results count and pagination controls */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="text-sm text-base-content/60">
+          Showing {filteredQuestions.length === 0 ? 0 : startIndex + 1}-{Math.min(endIndex, filteredQuestions.length)} of {filteredQuestions.length} questions
+          {filteredQuestions.length !== questions.length && ` (${questions.length} total)`}
+        </div>
+        
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-base-content/60">Per page:</label>
+            <select
+              className="select select-bordered select-sm w-20"
+              value={itemsPerPage}
+              onChange={(e) => {
+                setItemsPerPage(parseInt(e.target.value, 10))
+                setCurrentPage(1)
+              }}
+            >
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+            </select>
+          </div>
+          
+          {totalPages > 1 && (
+            <div className="join">
+              <button
+                className="join-item btn btn-sm"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+              >
+                «
+              </button>
+              {Array.from({ length: Math.min(7, totalPages) }, (_, i) => {
+                let pageNum
+                if (totalPages <= 7) {
+                  pageNum = i + 1
+                } else if (currentPage <= 4) {
+                  pageNum = i + 1
+                } else if (currentPage >= totalPages - 3) {
+                  pageNum = totalPages - 6 + i
+                } else {
+                  pageNum = currentPage - 3 + i
+                }
+                
+                return (
+                  <button
+                    key={pageNum}
+                    className={`join-item btn btn-sm ${currentPage === pageNum ? 'btn-active' : ''}`}
+                    onClick={() => setCurrentPage(pageNum)}
+                  >
+                    {pageNum}
+                  </button>
+                )
+              })}
+              <button
+                className="join-item btn btn-sm"
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+              >
+                »
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Questions List */}
       <div className="space-y-3">
-        {filteredQuestions.map((q, idx) => {
+        {paginatedQuestions.map((q, idx) => {
           const isExpanded = expandedQuestion === q.questionId
 
           return (
