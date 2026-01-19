@@ -50,7 +50,15 @@ VITE_SUPABASE_ANON_KEY=sb_publishable_xxx...  # or eyJ... for legacy projects
 1. Go to **Authentication** → **Settings**
 2. Enable **Email** provider (already enabled by default)
 3. (Optional) Configure other providers (Google, GitHub, etc.)
-4. Set **Site URL** to your app URL (e.g., `http://localhost:5174`)
+4. Set **Site URL** to your app URL:
+   - For development: `http://localhost:5173` (or whatever port your dev server uses)
+   - For production: Your production URL (e.g., `https://yourdomain.com`)
+5. Under **Redirect URLs**, add:
+   - `http://localhost:5173/**` (for dev - use your actual dev port)
+   - `http://localhost:5174/**` (if you use multiple ports)
+   - Your production URL pattern (e.g., `https://yourdomain.com/**`)
+   
+   **Note:** The `/**` wildcard allows all paths under that domain.
 
 ## 6. Test the Setup
 

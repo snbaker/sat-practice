@@ -17,9 +17,14 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
 
 // Auth helpers
 export async function signUp(email, password) {
+  // Use current window location for redirect URL
+  const redirectTo = `${window.location.origin}/auth`
   const { data, error } = await supabase.auth.signUp({
     email,
-    password
+    password,
+    options: {
+      emailRedirectTo: redirectTo
+    }
   })
   if (error) throw error
   return data
