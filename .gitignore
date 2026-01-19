@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Question bank source files
+public/bank/questions/
+public/bank/incoming/
+public/bank/processed/

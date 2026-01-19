@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 
-export default function TakeTest({ result, onComplete, onCancel }) {
+export default function TakeTest({ result, allResults = [], onComplete, onCancel }) {
   const [responses, setResponses] = useState({})
   const [currentIndex, setCurrentIndex] = useState(0)
   const [showResults, setShowResults] = useState(false)
@@ -9,6 +9,26 @@ export default function TakeTest({ result, onComplete, onCancel }) {
   const [selectedSection, setSelectedSection] = useState(null) // null = choose, 'all' or section id
 
   const sections = result.data || []
+
+  // Build a lookup map of all questions by ID for finding influencing questions
+  const questionLookup = useMemo(() => {
+    const lookup = {}
+    allResults.forEach(r => {
+      if (!Array.isArray(r.data)) return
+      r.data.forEach(section => {
+        section.items?.forEach(item => {
+          if (item.questionId) {
+            lookup[item.questionId] = {
+              ...item,
+              sectionId: section.id,
+              testName: r.name
+            }
+          }
+        })
+      })
+    })
+    return lookup
+  }, [allResults])
 
   // Filter sections based on selection
   const activeSections = selectedSection === 'all'
@@ -96,12 +116,23 @@ export default function TakeTest({ result, onComplete, onCancel }) {
   const renderContent = (value) => {
     if (!value) return null
     if (typeof value === 'string') return value.trim() || null
-    if (value.body) return value.body
-    if (value.html) return value.html
-    if (value.text) return value.text
-    if (value.content) return value.content
-    if (value.value) return value.value
-    if (typeof value === 'object' && Object.keys(value).length === 0) return null
+    if (typeof value === 'number') return String(value)
+    if (value.body) return renderContent(value.body)
+    if (value.html) return renderContent(value.html)
+    if (value.text) return renderContent(value.text)
+    if (value.content) return renderContent(value.content)
+    if (value.value) return renderContent(value.value)
+    if (Array.isArray(value)) return value.map(v => renderContent(v)).filter(Boolean).join(' ')
+    if (typeof value === 'object') {
+      // Empty object
+      if (Object.keys(value).length === 0) return null
+      // Try to find any string property as fallback
+      const firstStringValue = Object.values(value).find(v => typeof v === 'string')
+      if (firstStringValue) return firstStringValue
+      // Last resort: stringify but warn in console
+      console.warn('Unknown content structure:', value)
+      return null
+    }
     return null
   }
 
@@ -242,6 +273,37 @@ export default function TakeTest({ result, onComplete, onCancel }) {
                                 <div className="text-xs font-medium text-primary/70 mb-1">Why this question was generated</div>
                                 <div className="text-sm text-primary/80">
                                   {item.generationReason}
+                                </div>
+                              </div>
+                            )}
+
+                            {item.influencedBy && item.influencedBy.length > 0 && (
+                              <div className="bg-secondary/10 p-3 rounded">
+                                <div className="text-xs font-medium text-secondary/70 mb-2">Based on these questions from your history</div>
+                                <div className="space-y-2">
+                                  {item.influencedBy.map(qId => {
+                                    const origQuestion = questionLookup[qId]
+                                    if (!origQuestion) return null
+                                    return (
+                                      <div key={qId} className="bg-base-100 p-2 rounded text-sm">
+                                        <div className="flex items-start gap-2">
+                                          <span className={`badge badge-xs ${origQuestion.answer?.correct ? 'badge-success' : 'badge-error'}`}>
+                                            {origQuestion.answer?.correct ? 'Correct' : 'Incorrect'}
+                                          </span>
+                                          <div className="flex-1 min-w-0">
+                                            <div className="text-xs text-base-content/60 mb-1">
+                                              {origQuestion.testName} • {origQuestion.sectionId === 'reading' ? 'Reading & Writing' : 'Math'}
+                                              {origQuestion.metadata?.PRIMARY_CLASS_CD && ` • ${origQuestion.metadata.PRIMARY_CLASS_CD}`}
+                                            </div>
+                                            <div
+                                              className="line-clamp-2 text-sm"
+                                              dangerouslySetInnerHTML={{ __html: origQuestion.prompt }}
+                                            />
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )
+                                  })}
                                 </div>
                               </div>
                             )}

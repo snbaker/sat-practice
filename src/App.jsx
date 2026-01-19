@@ -7,6 +7,7 @@ import Analysis from './components/Analysis'
 import Generate from './components/Generate'
 import Settings from './components/Settings'
 import TakeTest from './components/TakeTest'
+import QuestionBank from './components/QuestionBank'
 import { getTopicName } from './utils/topicMappings'
 
 const STORAGE_KEY = 'sat-practice-results'
@@ -184,6 +185,7 @@ function App() {
         <div className="container mx-auto px-4 py-8 max-w-4xl">
           <TakeTest
             result={takingTest}
+            allResults={results}
             onComplete={handleTestComplete}
             onCancel={handleCancelTest}
           />
@@ -274,6 +276,13 @@ function App() {
             className={`tab ${activeTab === 'history' ? 'tab-active' : ''}`}
           >
             History ({results.filter(r => !r.generated).length})
+          </Link>
+          <Link
+            to="/bank"
+            role="tab"
+            className={`tab ${activeTab === 'bank' ? 'tab-active' : ''}`}
+          >
+            Bank
           </Link>
         </div>
 
@@ -370,10 +379,12 @@ function App() {
                               <div>
                                 <h3 className="card-title">{result.name}</h3>
                                 <p className="text-sm text-base-content/60">
-                                  {new Date(result.uploadedAt).toLocaleDateString('en-US', {
+                                  {new Date(result.uploadedAt).toLocaleString('en-US', {
                                     year: 'numeric',
                                     month: 'short',
-                                    day: 'numeric'
+                                    day: 'numeric',
+                                    hour: 'numeric',
+                                    minute: '2-digit'
                                   })}
                                 </p>
                                 <p className="text-sm mt-2">
@@ -384,10 +395,12 @@ function App() {
                                 <div className="badge badge-primary">New</div>
                                 <div className={`badge ${
                                   result.generationType === 'ai' ? 'badge-secondary' :
-                                  result.generationType === 'category' ? 'badge-info' : 'badge-accent'
+                                  result.generationType === 'category' ? 'badge-info' :
+                                  result.generationType === 'bank' ? 'badge-warning' : 'badge-accent'
                                 }`}>
                                   {result.generationType === 'ai' ? 'AI Generated' :
-                                   result.generationType === 'category' ? 'Category Focus' : 'Review'}
+                                   result.generationType === 'category' ? 'Category Focus' :
+                                   result.generationType === 'bank' ? 'Question Bank' : 'Review'}
                                 </div>
                               </div>
                             </div>
@@ -451,6 +464,8 @@ function App() {
               )}
             </div>
           } />
+
+          <Route path="/bank" element={<QuestionBank />} />
         </Routes>
       </div>
 

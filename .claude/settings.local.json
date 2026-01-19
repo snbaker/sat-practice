@@ -9,7 +9,12 @@
       "Bash(for file in /Users/stephenbaker/Development/sat-practice/public/data/test-*.json)",
       "Bash(do)",
       "Bash(done)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(node -p:*)",
+      "Bash(node /Users/stephenbaker/Development/sat-practice/scripts/build-question-bank.js:*)",
+      "Bash(node /Users/stephenbaker/Development/sat-practice/scripts/build-question-bank.cjs:*)",
+      "Bash(node /Users/stephenbaker/Development/sat-practice/scripts/process-sullivan-ela.cjs:*)",
+      "Bash(git -C /Users/stephenbaker/Development/sat-practice add -n public/bank/)"
     ]
   }
 }

@@ -3,7 +3,7 @@ import { hasApiKey, generateTest } from '../services/openai'
 import { getTopicName } from '../utils/topicMappings'
 
 export default function Generate({ results, onTestGenerated, onOpenSettings, categoryFilter, onClearCategoryFilter }) {
-  const [mode, setMode] = useState('review') // 'ai' or 'review'
+  const [mode, setMode] = useState('review') // 'ai', 'review', or 'bank'
   const [section, setSection] = useState('both')
   const [questionCount, setQuestionCount] = useState(5)
 
@@ -19,7 +19,38 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
   const [error, setError] = useState(null)
   const [success, setSuccess] = useState(false)
 
-  const questionCounts = [5, 10, 20]
+  // Question bank state
+  const [bankQuestions, setBankQuestions] = useState([])
+  const [bankLoading, setBankLoading] = useState(true)
+
+  // Load question bank
+  useEffect(() => {
+    const loadBank = async () => {
+      try {
+        const response = await fetch('/bank/question-bank.json')
+        if (!response.ok) {
+          setBankQuestions([])
+          return
+        }
+        const data = await response.json()
+        const allQuestions = data.flatMap(section =>
+          (section.items || []).map(item => ({
+            ...item,
+            sectionId: section.id
+          }))
+        )
+        setBankQuestions(allQuestions)
+      } catch (e) {
+        console.log('No question bank found')
+        setBankQuestions([])
+      } finally {
+        setBankLoading(false)
+      }
+    }
+    loadBank()
+  }, [])
+
+  const questionCounts = [1, 5, 10, 20]
 
   // Get available questions from uploaded (non-generated) tests
   const availableQuestions = useMemo(() => {
@@ -192,16 +223,157 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
     setSuccess(true)
   }
 
+  // Analyze weak areas from user's test history
+  const weakAreas = useMemo(() => {
+    const categoryStats = {}
+
+    results
+      .filter(r => !r.generated)
+      .forEach(result => {
+        if (!Array.isArray(result.data)) return
+        result.data.forEach(s => {
+          s.items?.forEach(item => {
+            const category = item.metadata?.PRIMARY_CLASS_CD
+            if (!category) return
+
+            if (!categoryStats[category]) {
+              categoryStats[category] = { wrong: 0, total: 0, sectionId: s.id }
+            }
+            categoryStats[category].total++
+            if (!item.answer?.correct) {
+              categoryStats[category].wrong++
+            }
+          })
+        })
+      })
+
+    // Calculate error rate and sort by weakness
+    return Object.entries(categoryStats)
+      .map(([code, stats]) => ({
+        code,
+        sectionId: stats.sectionId,
+        errorRate: stats.wrong / stats.total,
+        wrong: stats.wrong,
+        total: stats.total
+      }))
+      .sort((a, b) => b.errorRate - a.errorRate)
+  }, [results])
+
+  const handleGenerateBank = () => {
+    setError(null)
+    setSuccess(false)
+
+    // Filter bank questions by section
+    let pool = bankQuestions.filter(q => {
+      if (section === 'both') return true
+      return q.sectionId === section
+    })
+
+    // Filter by category if set
+    if (categoryFilter) {
+      pool = pool.filter(q => q.metadata?.PRIMARY_CLASS_CD === categoryFilter.categoryCode)
+    }
+
+    if (pool.length === 0) {
+      setError(categoryFilter
+        ? `No bank questions available for this category.`
+        : 'No questions available in the bank for this section.')
+      return
+    }
+
+    const shuffle = arr => [...arr].sort(() => Math.random() - 0.5)
+
+    // Weight selection based on weak areas
+    // Questions matching weak categories get higher priority
+    const weakCategoryCodes = new Set(
+      weakAreas.slice(0, 5).map(w => w.code)
+    )
+
+    const weakPool = pool.filter(q => weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+    const otherPool = pool.filter(q => !weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+
+    // Use wrongRatio to determine how many from weak areas vs random
+    const weakCount = Math.round(questionCount * (wrongRatio / 100))
+    const otherCount = questionCount - weakCount
+
+    let selected = [
+      ...shuffle(weakPool).slice(0, weakCount),
+      ...shuffle(otherPool).slice(0, otherCount)
+    ]
+
+    // Fill remaining from whatever is available
+    if (selected.length < questionCount) {
+      const usedIds = new Set(selected.map(q => q.questionId))
+      const remaining = shuffle(pool.filter(q => !usedIds.has(q.questionId)))
+        .slice(0, questionCount - selected.length)
+      selected = [...selected, ...remaining]
+    }
+
+    selected = shuffle(selected)
+
+    if (selected.length === 0) {
+      setError('Not enough questions available in the bank.')
+      return
+    }
+
+    // Build test structure
+    const readingItems = selected
+      .filter(q => q.sectionId === 'reading')
+      .map((q, i) => ({
+        ...q,
+        displayNumber: String(i + 1),
+        answer: { ...q.answer, correct: false, response: undefined }
+      }))
+
+    const mathItems = selected
+      .filter(q => q.sectionId === 'math')
+      .map((q, i) => ({
+        ...q,
+        displayNumber: String(i + 1),
+        answer: { ...q.answer, correct: false, response: undefined }
+      }))
+
+    const testData = []
+    if (readingItems.length > 0) {
+      testData.push({ id: 'reading', items: readingItems })
+    }
+    if (mathItems.length > 0) {
+      testData.push({ id: 'math', items: mathItems })
+    }
+
+    const categoryName = categoryFilter ? getTopicName(categoryFilter.categoryCode, categoryFilter.sectionId) : null
+    const newResult = {
+      data: testData,
+      id: Date.now(),
+      uploadedAt: new Date().toISOString(),
+      name: categoryName
+        ? `${categoryName} Bank - ${new Date().toLocaleDateString()}`
+        : `Bank Practice - ${new Date().toLocaleDateString()}`,
+      generated: true,
+      generationType: 'bank',
+      categoryCode: categoryFilter?.categoryCode,
+      taken: false
+    }
+
+    onTestGenerated(newResult)
+    setSuccess(true)
+  }
+
   const handleGenerate = () => {
     if (mode === 'ai') {
       handleGenerateAI()
+    } else if (mode === 'bank') {
+      handleGenerateBank()
     } else {
       handleGenerateReview()
     }
   }
 
   const apiKeyConfigured = hasApiKey()
-  const canGenerate = mode === 'review' ? totalAvailable > 0 : apiKeyConfigured
+  const canGenerate =
+    mode === 'review' ? totalAvailable > 0 :
+    mode === 'bank' ? bankQuestions.length > 0 :
+    apiKeyConfigured
 
   return (
     <div className="space-y-6">
@@ -228,23 +400,31 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
           {/* Mode Selection */}
           <div>
             <div className="text-sm font-medium mb-2">Source</div>
-            <div className="join w-fit">
+            <div className="join w-fit flex-wrap">
+              <button
+                className={`btn join-item ${mode === 'review' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setMode('review')}
+              >
+                Review Past
+              </button>
+              <button
+                className={`btn join-item ${mode === 'bank' ? 'btn-primary' : 'btn-ghost'}`}
+                onClick={() => setMode('bank')}
+              >
+                Question Bank
+              </button>
               <button
                 className={`btn join-item ${mode === 'ai' ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setMode('ai')}
               >
                 AI Generated
               </button>
-              <button
-                className={`btn join-item ${mode === 'review' ? 'btn-primary' : 'btn-ghost'}`}
-                onClick={() => setMode('review')}
-              >
-                Review Past Questions
-              </button>
             </div>
             <p className="text-xs text-base-content/60 mt-2">
               {mode === 'ai'
                 ? 'Create new questions using AI based on your weak areas'
+                : mode === 'bank'
+                ? `Pull from question bank, weighted by your weak areas (${bankQuestions.length} available)`
                 : `Pull actual questions from your uploaded tests (${totalAvailable} available)`
               }
             </p>
@@ -268,6 +448,15 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
               </svg>
               <span>No uploaded tests found. Upload some tests first!</span>
+            </div>
+          )}
+
+          {mode === 'bank' && !bankLoading && bankQuestions.length === 0 && (
+            <div className="alert alert-warning mt-4">
+              <svg xmlns="http://www.w3.org/2000/svg" className="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+              <span>Question bank is empty. Add questions to /public/bank/</span>
             </div>
           )}
 
@@ -315,8 +504,15 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
           {/* Wrong/Correct Ratio */}
           <div className="mt-4">
             <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium">Question Mix</span>
-              <span className="text-sm text-base-content/60">{wrongRatio}% wrong / {100 - wrongRatio}% correct</span>
+              <span className="text-sm font-medium">
+                {mode === 'bank' ? 'Focus on Weak Areas' : 'Question Mix'}
+              </span>
+              <span className="text-sm text-base-content/60">
+                {mode === 'bank'
+                  ? `${wrongRatio}% weak areas / ${100 - wrongRatio}% other`
+                  : `${wrongRatio}% wrong / ${100 - wrongRatio}% correct`
+                }
+              </span>
             </div>
             <input
               type="range"
@@ -328,13 +524,25 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
               className="range range-primary"
             />
             <div className="w-full flex justify-between text-xs px-2 mt-1">
-              <span>All correct</span>
-              <span>Balanced</span>
-              <span>All wrong</span>
+              {mode === 'bank' ? (
+                <>
+                  <span>Random</span>
+                  <span>Balanced</span>
+                  <span>Weak areas</span>
+                </>
+              ) : (
+                <>
+                  <span>All correct</span>
+                  <span>Balanced</span>
+                  <span>All wrong</span>
+                </>
+              )}
             </div>
             <p className="text-xs text-base-content/60 mt-2">
               {mode === 'ai'
                 ? 'AI will generate questions similar to ones you got wrong/right'
+                : mode === 'bank'
+                ? 'Weight toward categories where you struggle most'
                 : 'Mix of questions you previously got wrong vs correct'
               }
             </p>
@@ -380,7 +588,9 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
                   Generating {progress.current} of {progress.total}...
                 </>
               ) : (
-                mode === 'ai' ? 'Generate with AI' : 'Create Review Test'
+                mode === 'ai' ? 'Generate with AI' :
+                mode === 'bank' ? 'Create from Bank' :
+                'Create Review Test'
               )}
             </button>
           </div>

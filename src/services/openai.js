@@ -79,7 +79,7 @@ function buildSystemPrompt() {
 For each question, you must output valid JSON in exactly this format:
 {
   "prompt": "<p>The question text goes here</p>",
-  "passage": { "body": "<p>Any passage or context text goes here. Use this for reading comprehension or context-based questions.</p>" },
+  "passage": { "body": "<p>The passage or context that the question is based on. For reading questions, this is REQUIRED and should be 2-5 sentences providing context.</p>" },
   "answer": {
     "choices": {
       "A": { "body": "<p>First answer choice</p>" },
@@ -96,6 +96,7 @@ For each question, you must output valid JSON in exactly this format:
     "TERTIARY_CLASS_CD": "Skill code"
   },
   "generationReason": "Plain text (no HTML) explanation of why this question was generated based on the student's weak areas",
+  "influencedBy": ["id1", "id2"],
   "section": "reading or math (use one of these exact values)"
 }
 
@@ -105,9 +106,11 @@ Rules:
 - Use &ldquo; and &rdquo; for smart quotes
 - Use &rsquo; for apostrophes
 - For math questions, include LaTeX in \\(...\\) for inline math
-- The passage field can be omitted for questions that don't need context
+- IMPORTANT: Reading & Writing questions MUST include a passage with context (a short article, excerpt, or scenario that the question refers to). The passage should be 2-5 sentences.
+- Math questions may omit the passage field if the question is self-contained
 - Keep rationales concise (2-3 sentences max) - briefly explain the correct answer
-- Vary difficulty levels appropriately for SAT`
+- Vary difficulty levels appropriately for SAT
+- influencedBy: Array of example question IDs that most influenced this generated question (use the IDs provided with examples). Include 1-2 IDs of questions that were most similar in topic or style.`
 }
 
 /**
@@ -121,14 +124,18 @@ function buildUserPrompt(section, questionCount, examples, focusOnWeakAreas) {
 
     examples.forEach((q, i) => {
       const isCorrect = q.answer?.correct ? '(answered correctly)' : '(answered incorrectly)'
+      const qId = q.questionId || `example-${i + 1}`
       prompt += `Example ${i + 1} ${isCorrect}:\n`
+      prompt += `ID: ${qId}\n`
       prompt += `Section: ${q.sectionId}\n`
       prompt += `Category: ${q.metadata?.PRIMARY_CLASS_CD || 'Unknown'}\n`
       prompt += `Subcategory: ${q.metadata?.SECONDARY_CLASS_CD || 'Unknown'}\n`
       if (q.passage?.body) {
-        prompt += `Passage: ${q.passage.body.substring(0, 200)}...\n`
+        // Strip HTML tags for cleaner example, send up to 500 chars
+        const cleanPassage = q.passage.body.replace(/<[^>]*>/g, '').substring(0, 500)
+        prompt += `Passage: ${cleanPassage}${cleanPassage.length >= 500 ? '...' : ''}\n`
       }
-      prompt += `Question: ${q.prompt}\n`
+      prompt += `Question: ${q.prompt?.replace(/<[^>]*>/g, '') || ''}\n`
       prompt += `Correct Answer: ${q.answer?.correctChoice}\n\n`
     })
   }
