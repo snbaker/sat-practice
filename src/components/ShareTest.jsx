@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { Share2, Copy, Check } from 'lucide-react'
 import { updateTest } from '../services/supabase'
 
 export default function ShareTest({ test, onUpdate }) {
@@ -8,6 +9,24 @@ export default function ShareTest({ test, onUpdate }) {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [message, setMessage] = useState(null)
+  const [shareLink, setShareLink] = useState(null)
+  const [copied, setCopied] = useState(false)
+
+  // Sync isPublic with test prop
+  useEffect(() => {
+    setIsPublic(test.is_public || false)
+  }, [test.is_public])
+
+  // Generate link when modal opens if test is public
+  useEffect(() => {
+    if (isOpen && isPublic && test.id) {
+      const link = `${window.location.origin}/test/${test.id}`
+      setShareLink(link)
+    } else if (isOpen && !isPublic) {
+      // Clear link if test is not public
+      setShareLink(null)
+    }
+  }, [isOpen, isPublic, test.id])
 
   const handleSave = async () => {
     setLoading(true)
@@ -31,14 +50,22 @@ export default function ShareTest({ test, onUpdate }) {
       await updateTest(test.id, updates)
       setMessage('Sharing settings updated!')
       
+      // Generate shareable link
+      const link = `${window.location.origin}/test/${test.id}`
+      setShareLink(link)
+      
       if (onUpdate) {
         onUpdate()
       }
       
-      setTimeout(() => {
-        setIsOpen(false)
-        setMessage(null)
-      }, 1500)
+      // Don't auto-close if there's a share link to show
+      if (!isPublic) {
+        setTimeout(() => {
+          setIsOpen(false)
+          setMessage(null)
+          setShareLink(null)
+        }, 1500)
+      }
     } catch (err) {
       setError(err.message)
     } finally {
@@ -53,9 +80,7 @@ export default function ShareTest({ test, onUpdate }) {
         onClick={() => setIsOpen(true)}
         title="Share test"
       >
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M7.217 10.907a2.25 2.25 0 1 0 0 2.186m0-2.186c.18.324.283.696.283 1.093s-.103.77-.283 1.093m0-2.186a2.25 2.25 0 1 1 0 2.186M6.5 15.25a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Zm0 0v-1.25m0 0h1.25m-1.25 0h-1.25m13.5 0a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5Zm0 0v-1.25m0 0h-1.25m1.25 0h1.25" />
-        </svg>
+        <Share2 className="w-4 h-4" />
         Share
       </button>
     )
@@ -115,19 +140,92 @@ export default function ShareTest({ test, onUpdate }) {
               <span>{message}</span>
             </div>
           )}
+
+          {shareLink && isPublic && (
+            <div className="form-control">
+              <label className="label">
+                <span className="label-text font-semibold">Shareable Link</span>
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  readOnly
+                  value={shareLink}
+                  className="input input-bordered flex-1 font-mono text-sm"
+                  onClick={(e) => e.target.select()}
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(shareLink)
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    } catch (err) {
+                      // Fallback for older browsers
+                      const input = document.createElement('input')
+                      input.value = shareLink
+                      document.body.appendChild(input)
+                      input.select()
+                      document.execCommand('copy')
+                      document.body.removeChild(input)
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 2000)
+                    }
+                  }}
+                >
+                  {copied ? (
+                    <>
+                      <Check className="w-4 h-4" />
+                      Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-4 h-4" />
+                      Copy
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className="label">
+                <span className="label-text-alt text-base-content/60">
+                  Anyone with this link can view and take this test (if they're signed in)
+                </span>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="modal-action">
-          <button className="btn btn-ghost" onClick={() => setIsOpen(false)}>
-            Cancel
+          <button 
+            className="btn btn-ghost" 
+            onClick={() => {
+              setIsOpen(false)
+              // Only clear link if test is not public (it will be regenerated on next open if public)
+              if (!isPublic) {
+                setShareLink(null)
+              }
+              setCopied(false)
+            }}
+          >
+            {shareLink ? 'Close' : 'Cancel'}
           </button>
-          <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
-            {loading ? <span className="loading loading-spinner"></span> : 'Save'}
-          </button>
+          {!shareLink && (
+            <button className="btn btn-primary" onClick={handleSave} disabled={loading}>
+              {loading ? <span className="loading loading-spinner"></span> : 'Save'}
+            </button>
+          )}
         </div>
       </div>
       <form method="dialog" className="modal-backdrop">
-        <button onClick={() => setIsOpen(false)}>close</button>
+        <button onClick={() => {
+          setIsOpen(false)
+          // Only clear link if test is not public
+          if (!isPublic) {
+            setShareLink(null)
+          }
+          setCopied(false)
+        }}>close</button>
       </form>
     </dialog>
   )

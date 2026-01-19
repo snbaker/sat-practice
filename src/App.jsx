@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import { Routes, Route, Link, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Link, useNavigate, useLocation, useParams } from 'react-router-dom'
 import DropZone from './components/DropZone'
 import TestResults from './components/TestResults'
 import Dashboard from './components/Dashboard'
@@ -11,7 +11,7 @@ import QuestionBank from './components/QuestionBank'
 import Auth from './components/Auth'
 import ShareTest from './components/ShareTest'
 import { getTopicName } from './utils/topicMappings'
-import { getCurrentUser, onAuthStateChange, signOut as supabaseSignOut, createTest, createAttempt, getMyTests, getMyAttempts, migrateTestsFromData } from './services/supabase'
+import { getCurrentUser, onAuthStateChange, signOut as supabaseSignOut, createTest, createAttempt, getMyTests, getMyAttempts, migrateTestsFromData, getTest, getAvailableTests, supabase } from './services/supabase'
 
 const STORAGE_KEY = 'sat-practice-results'
 const THEME_KEY = 'sat-practice-theme'
@@ -62,12 +62,32 @@ function App() {
 
       try {
         // Get initial user with timeout
-        const currentUser = await Promise.race([
-          getCurrentUser(),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Auth check timeout')), 3000)
-          )
-        ])
+        let currentUser = null
+        try {
+          currentUser = await Promise.race([
+            getCurrentUser(),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Auth check timeout')), 3000)
+            )
+          ])
+        } catch (getUserError) {
+          // If getUser fails, try to get session directly
+          console.log('getCurrentUser failed, checking session directly:', getUserError)
+          try {
+            const { data: { session }, error: sessionError } = await supabase.auth.getSession()
+            if (sessionError) {
+              console.log('Session error:', sessionError)
+            }
+            if (session?.user) {
+              currentUser = session.user
+              console.log('Found user from session:', currentUser.email)
+            } else {
+              console.log('No session found')
+            }
+          } catch (sessionError) {
+            console.log('Session check also failed:', sessionError)
+          }
+        }
         
         if (timeoutId) clearTimeout(timeoutId)
         if (!mounted) return
@@ -75,12 +95,17 @@ function App() {
         setUser(currentUser)
         setAuthLoading(false)
         
-        // Set up auth state listener
+        // Set up auth state listener - this will also fire with current session on mount
         const { data: { subscription } } = onAuthStateChange(async (event, session) => {
           if (!mounted) return
           
-          if (event === 'SIGNED_IN' && session?.user) {
+          console.log('Auth state change event:', event, 'hasSession:', !!session, 'hasUser:', !!session?.user)
+          
+          // Handle initial session (SIGNED_IN or INITIAL_SESSION)
+          if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && session?.user) {
+            console.log('Setting user from auth state change:', session.user.email)
             setUser(session.user)
+            setAuthLoading(false)
             
             // Navigate away from auth page immediately after successful sign-in
             // Use window.location to avoid React Router issues
@@ -144,6 +169,11 @@ function App() {
   useEffect(() => {
     if (authLoading) return // Wait for initial auth check
     if (redirectingRef.current) return // Already redirecting
+    
+    // Allow test routes to load (they handle their own auth checks)
+    if (location.pathname.startsWith('/test/')) {
+      return
+    }
     
     if (user && location.pathname === '/auth') {
       // User is authenticated but on auth page - redirect to dashboard
@@ -494,6 +524,13 @@ function App() {
         </div>
         <div className="flex-none flex gap-2 items-center">
           {/* User Menu Dropdown */}
+          {(() => {
+            // Debug auth state on test routes
+            if (location.pathname.startsWith('/test/')) {
+              console.log('Navbar auth check:', { authLoading, hasUser: !!user, userEmail: user?.email })
+            }
+            return null
+          })()}
           {!authLoading && user ? (
             <div className="dropdown dropdown-end">
               <div tabIndex={0} role="button" className="btn btn-ghost btn-sm">
@@ -563,17 +600,22 @@ function App() {
             <Link to="/auth" className="btn btn-primary btn-sm">
               Sign In
             </Link>
-          ) : null}
+          ) : (
+            <div className="btn btn-ghost btn-sm btn-disabled">
+              <span className="loading loading-spinner loading-sm"></span>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Show loading spinner only briefly while checking auth, or show content */}
-      {authLoading && !user && location.pathname !== '/auth' ? (
+      {authLoading && !user && location.pathname !== '/auth' && !location.pathname.startsWith('/test/') ? (
         <div className="flex items-center justify-center min-h-screen">
           <span className="loading loading-spinner loading-lg"></span>
         </div>
-      ) : (user || location.pathname === '/auth') ? (
+      ) : (user || location.pathname === '/auth' || location.pathname.startsWith('/test/')) ? (
         <div className="container mx-auto px-4 py-8 max-w-4xl">
+        {!location.pathname.startsWith('/test/') && (
         <div role="tablist" className="tabs tabs-boxed mb-6">
           <Link
             to="/"
@@ -625,6 +667,7 @@ function App() {
             Bank
           </Link>
         </div>
+        )}
 
         <Routes>
           <Route path="/" element={<Dashboard results={results} />} />
@@ -850,6 +893,13 @@ function App() {
 
           <Route path="/bank" element={<QuestionBank />} />
           
+          <Route path="/test/:testId" element={
+            <TestViewerComponent 
+              onTakeTest={handleTakeTest}
+              onTestComplete={handleTestComplete}
+            />
+          } />
+          
           <Route path="/auth" element={
             <div className="py-8">
               <Auth onAuthSuccess={handleAuthSuccess} />
@@ -860,6 +910,189 @@ function App() {
       ) : null}
 
       <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+    </div>
+  )
+}
+
+// Component to view a test by ID from URL
+function TestViewerComponent({ onTakeTest, onTestComplete }) {
+  const { testId } = useParams()
+  const navigate = useNavigate()
+  const [test, setTest] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  // Debug: log when component mounts
+  useEffect(() => {
+    console.log('TestViewerComponent mounted with testId:', testId)
+  }, [testId])
+
+  useEffect(() => {
+    const loadTest = async () => {
+      if (!testId) {
+        setError('No test ID provided')
+        setLoading(false)
+        return
+      }
+
+      try {
+        setLoading(true)
+        setError(null)
+        console.log('Loading test with ID:', testId)
+        
+        // First try direct get (fastest, works for any accessible test)
+        // This will work for:
+        // - Tests created by the current user (via RLS)
+        // - Public tests (via RLS)
+        // - Tests shared with the current user (via RLS)
+        try {
+          console.log('Attempting direct getTest...')
+          const directTest = await getTest(testId)
+          console.log('Direct getTest succeeded:', directTest)
+          
+          if (!directTest || !directTest.sections) {
+            throw new Error('Test data is invalid')
+          }
+          
+          // Convert to result format
+          const result = {
+            id: directTest.id,
+            name: directTest.name,
+            uploadedAt: directTest.created_at,
+            generated: directTest.generated,
+            generationType: directTest.generation_type,
+            categoryCode: directTest.category_code,
+            data: directTest.sections,
+            taken: false,
+            _supabaseTestId: directTest.id,
+            _isPublic: directTest.is_public,
+            _sharedWith: directTest.shared_with || [],
+            _createdBy: directTest.created_by
+          }
+          setTest(result)
+          setLoading(false)
+          return
+        } catch (directError) {
+          // If direct get fails, try from available tests
+          console.log('Direct get failed, trying available tests:', directError)
+        }
+        
+        // Fallback: try to get from available tests (includes my tests, public, shared)
+        try {
+          console.log('Attempting getAvailableTests...')
+          const availableTests = await getAvailableTests()
+          console.log('Available tests count:', availableTests.length)
+          
+          // Handle both UUID string and UUID object comparison
+          const foundTest = availableTests.find(t => {
+            const testIdStr = String(testId)
+            const tIdStr = String(t.id)
+            return tIdStr === testIdStr || t.id === testId
+          })
+          
+          if (foundTest) {
+            console.log('Found test in available tests:', foundTest)
+            const result = {
+              id: foundTest.id,
+              name: foundTest.name,
+              uploadedAt: foundTest.created_at,
+              generated: foundTest.generated,
+              generationType: foundTest.generation_type,
+              categoryCode: foundTest.category_code,
+              data: foundTest.sections,
+              taken: false,
+              _supabaseTestId: foundTest.id,
+              _isPublic: foundTest.is_public,
+              _sharedWith: foundTest.shared_with || [],
+              _createdBy: foundTest.created_by
+            }
+            setTest(result)
+            setLoading(false)
+            return
+          } else {
+            console.log('Test not found in available tests')
+          }
+        } catch (availableError) {
+          console.error('Available tests fetch failed:', availableError)
+        }
+        
+        // If we get here, test wasn't found
+        console.error('Test not found after all attempts')
+        setError('Test not found or you do not have access to it. Make sure you are signed in and the test is public or shared with you.')
+      } catch (err) {
+        console.error('Error loading test:', err)
+        setError(err.message || 'Failed to load test')
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    loadTest()
+  }, [testId])
+
+  if (loading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-screen gap-4">
+        <span className="loading loading-spinner loading-lg"></span>
+        <p className="text-base-content/60">Loading test...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="alert alert-error">
+          <span>{error}</span>
+        </div>
+        <button className="btn btn-primary mt-4" onClick={() => navigate('/')}>
+          Go Home
+        </button>
+      </div>
+    )
+  }
+
+  if (!test) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="alert alert-warning">
+          <span>Test not found</span>
+        </div>
+        <button className="btn btn-primary mt-4" onClick={() => navigate('/')}>
+          Go Home
+        </button>
+      </div>
+    )
+  }
+
+  // Validate test data before rendering
+  if (!test.data || !Array.isArray(test.data) || test.data.length === 0) {
+    return (
+      <div className="container mx-auto px-4 py-8">
+        <div className="alert alert-error">
+          <span>Test data is invalid or empty</span>
+        </div>
+        <button className="btn btn-primary mt-4" onClick={() => navigate('/')}>
+          Go Home
+        </button>
+      </div>
+    )
+  }
+
+  // Use TakeTest component to display the test
+  return (
+    <div className="container mx-auto px-4 py-8">
+      <div className="mb-4">
+        <button className="btn btn-ghost btn-sm" onClick={() => navigate('/')}>
+          ← Back
+        </button>
+      </div>
+      <TakeTest 
+        result={test} 
+        allResults={[test]}
+        onComplete={onTestComplete}
+        onCancel={() => navigate('/')}
+      />
     </div>
   )
 }

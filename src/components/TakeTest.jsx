@@ -348,8 +348,7 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                                               {origQuestion.metadata?.PRIMARY_CLASS_CD && ` • ${origQuestion.metadata.PRIMARY_CLASS_CD}`}
                                             </div>
                                             <div
-                                              className="line-clamp-2 text-sm"
-                                              className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline"
+                                              className="line-clamp-2 text-sm [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline"
                                               style={{ lineHeight: '1.6' }}
                                               dangerouslySetInnerHTML={{ __html: renderContent(origQuestion.prompt) }}
                                             />

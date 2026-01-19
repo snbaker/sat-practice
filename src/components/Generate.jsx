@@ -188,9 +188,28 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
     // Shuffle function
     const shuffle = arr => [...arr].sort(() => Math.random() - 0.5)
 
-    // Select questions
-    const selectedWrong = shuffle(wrongPool).slice(0, wrongCount)
-    const selectedCorrect = shuffle(correctPool).slice(0, correctCount)
+    // Prioritize weak areas: separate wrong/correct pools by weak categories
+    const weakCategoryCodes = new Set(
+      relevantWeakAreas.slice(0, 5).map(w => w.code)
+    )
+    
+    const wrongFromWeak = wrongPool.filter(q => weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+    const wrongFromOther = wrongPool.filter(q => !weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+    const correctFromWeak = correctPool.filter(q => weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+    const correctFromOther = correctPool.filter(q => !weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
+
+    // Prioritize wrong questions from weak areas, then others
+    // Prioritize correct questions from weak areas, then others
+    const selectedWrong = [
+      ...shuffle(wrongFromWeak).slice(0, wrongCount),
+      ...shuffle(wrongFromOther).slice(0, Math.max(0, wrongCount - wrongFromWeak.length))
+    ].slice(0, wrongCount)
+    
+    const selectedCorrect = [
+      ...shuffle(correctFromWeak).slice(0, correctCount),
+      ...shuffle(correctFromOther).slice(0, Math.max(0, correctCount - correctFromWeak.length))
+    ].slice(0, correctCount)
+    
     let selected = shuffle([...selectedWrong, ...selectedCorrect])
 
     // If we don't have enough, fill from whatever is available
@@ -285,6 +304,70 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
       .sort((a, b) => b.errorRate - a.errorRate)
   }, [results])
 
+  // Calculate strength areas (best performance)
+  const strengthAreas = useMemo(() => {
+    return [...weakAreas]
+      .sort((a, b) => a.errorRate - b.errorRate)
+      .filter(area => area.total >= 3) // Only show if at least 3 questions
+  }, [weakAreas])
+
+  // Get weak areas that will be used for current section
+  const relevantWeakAreas = useMemo(() => {
+    return weakAreas.filter(area => {
+      if (section === 'both') return true
+      return area.sectionId === section
+    })
+  }, [weakAreas, section])
+
+  // Get top weak areas for bank mode (top 5)
+  const topWeakAreasForBank = useMemo(() => {
+    return relevantWeakAreas.slice(0, 5)
+  }, [relevantWeakAreas])
+
+  // Calculate available questions breakdown by category for review mode
+  const reviewModeBreakdown = useMemo(() => {
+    const breakdown = {}
+    
+    let pool = []
+    if (section === 'both' || section === 'reading') {
+      pool.push(...availableQuestions.reading)
+    }
+    if (section === 'both' || section === 'math') {
+      pool.push(...availableQuestions.math)
+    }
+
+    if (categoryFilter) {
+      pool = pool.filter(q => q.metadata?.PRIMARY_CLASS_CD === categoryFilter.categoryCode)
+    }
+
+    pool.forEach(q => {
+      const category = q.metadata?.PRIMARY_CLASS_CD || 'Uncategorized'
+      if (!breakdown[category]) {
+        breakdown[category] = { wrong: 0, correct: 0, sectionId: q.sectionId }
+      }
+      if (q.answer?.correct) {
+        breakdown[category].correct++
+      } else {
+        breakdown[category].wrong++
+      }
+    })
+
+    return Object.entries(breakdown)
+      .map(([code, stats]) => ({
+        code,
+        sectionId: stats.sectionId,
+        wrong: stats.wrong,
+        correct: stats.correct,
+        total: stats.wrong + stats.correct
+      }))
+      .sort((a, b) => {
+        // Sort by error rate (weakest first)
+        const errorRateA = a.wrong / a.total
+        const errorRateB = b.wrong / b.total
+        return errorRateB - errorRateA
+      })
+  }, [availableQuestions, section, categoryFilter])
+
   const handleGenerateBank = () => {
     setError(null)
     setSuccess(false)
@@ -312,7 +395,7 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
     // Weight selection based on weak areas
     // Questions matching weak categories get higher priority
     const weakCategoryCodes = new Set(
-      weakAreas.slice(0, 5).map(w => w.code)
+      topWeakAreasForBank.map(w => w.code)
     )
 
     const weakPool = pool.filter(q => weakCategoryCodes.has(q.metadata?.PRIMARY_CLASS_CD))
@@ -573,6 +656,148 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
               }
             </p>
           </div>
+
+          {/* Weak/Strength Areas Visibility */}
+          {results.filter(r => !r.generated).length > 0 && (
+            <div className="mt-6 card bg-base-100 shadow-sm border border-base-300">
+              <div className="card-body py-4">
+                <h3 className="text-sm font-semibold mb-3">Performance Analysis</h3>
+                
+                {mode === 'bank' && topWeakAreasForBank.length > 0 && (
+                  <div className="mb-4">
+                    <div className="text-xs font-medium text-base-content/70 mb-2">
+                      Top Weak Areas (will be prioritized):
+                    </div>
+                    <div className="space-y-1">
+                      {topWeakAreasForBank.map((area, idx) => {
+                        const pct = Math.round(area.errorRate * 100)
+                        return (
+                          <div key={area.code} className="flex items-center justify-between text-xs bg-error/10 p-2 rounded">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium text-error/70">#{idx + 1}</span>
+                              <span className="font-medium">{getTopicName(area.code, area.sectionId)}</span>
+                              <span className="text-base-content/50">({area.sectionId})</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-error">{area.wrong}/{area.total} wrong</span>
+                              <span className="font-bold text-error">{pct}%</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="text-xs text-base-content/50 mt-2">
+                      {wrongRatio}% of questions will come from these weak areas
+                    </div>
+                  </div>
+                )}
+
+                {mode === 'review' && reviewModeBreakdown.length > 0 && (
+                  <div className="mb-4">
+                    <div className="text-xs font-medium text-base-content/70 mb-2">
+                      Available Questions by Category (prioritizing weak areas):
+                    </div>
+                    <div className="space-y-1 max-h-48 overflow-y-auto">
+                      {reviewModeBreakdown.map((area) => {
+                        const wrongCount = Math.round(questionCount * (wrongRatio / 100))
+                        const correctCount = questionCount - wrongCount
+                        const availableWrong = Math.min(area.wrong, wrongCount)
+                        const availableCorrect = Math.min(area.correct, correctCount)
+                        const willSelect = Math.min(availableWrong + availableCorrect, questionCount)
+                        const errorRate = area.total > 0 ? Math.round((area.wrong / area.total) * 100) : 0
+                        
+                        return (
+                          <div key={area.code} className="flex items-center justify-between text-xs bg-base-200 p-2 rounded">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{getTopicName(area.code, area.sectionId)}</span>
+                              <span className="text-base-content/50">({area.sectionId})</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-error">{area.wrong} wrong</span>
+                              <span className="text-success">{area.correct} correct</span>
+                              <span className="text-base-content/50">({area.total} total)</span>
+                              {errorRate > 0 && (
+                                <span className="text-error/70 font-medium">{errorRate}% error</span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="text-xs text-base-content/50 mt-2">
+                      Will select ~{Math.round(questionCount * (wrongRatio / 100))} wrong and ~{questionCount - Math.round(questionCount * (wrongRatio / 100))} correct questions
+                      {relevantWeakAreas.length > 0 && (
+                        <span className="block mt-1">
+                          Prioritizing questions from weak areas: {relevantWeakAreas.slice(0, 3).map(w => getTopicName(w.code, w.sectionId)).join(', ')}
+                          {relevantWeakAreas.length > 3 && '...'}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {mode === 'ai' && relevantWeakAreas.length > 0 && (
+                  <div className="mb-4">
+                    <div className="text-xs font-medium text-base-content/70 mb-2">
+                      Weak Areas (AI will focus on similar topics):
+                    </div>
+                    <div className="space-y-1 max-h-32 overflow-y-auto">
+                      {relevantWeakAreas.slice(0, 5).map((area, idx) => {
+                        const pct = Math.round(area.errorRate * 100)
+                        return (
+                          <div key={area.code} className="flex items-center justify-between text-xs bg-error/10 p-2 rounded">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{getTopicName(area.code, area.sectionId)}</span>
+                              <span className="text-base-content/50">({area.sectionId})</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-error">{area.wrong}/{area.total} wrong</span>
+                              <span className="font-bold text-error">{pct}%</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    <div className="text-xs text-base-content/50 mt-2">
+                      AI will use 70% incorrect and 30% correct examples from your history
+                    </div>
+                  </div>
+                )}
+
+                {/* Strength Areas (collapsible) */}
+                {strengthAreas.length > 0 && (
+                  <details className="mt-4">
+                    <summary className="text-xs font-medium text-base-content/70 cursor-pointer">
+                      Strength Areas (best performance) ▼
+                    </summary>
+                    <div className="space-y-1 mt-2 max-h-32 overflow-y-auto">
+                      {strengthAreas.slice(0, 5).map((area) => {
+                        const pct = Math.round((1 - area.errorRate) * 100)
+                        return (
+                          <div key={area.code} className="flex items-center justify-between text-xs bg-success/10 p-2 rounded">
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">{getTopicName(area.code, area.sectionId)}</span>
+                              <span className="text-base-content/50">({area.sectionId})</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-success">{area.total - area.wrong}/{area.total} correct</span>
+                              <span className="font-bold text-success">{pct}%</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </details>
+                )}
+
+                {relevantWeakAreas.length === 0 && (
+                  <div className="text-xs text-base-content/50">
+                    No category data available from uploaded tests. Upload tests with category metadata to see weak areas.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {loading && progress.total > 1 && (
             <div className="mt-4">
