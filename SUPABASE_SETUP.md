@@ -16,7 +16,10 @@
 1. Go to **Settings** → **API**
 2. Copy:
    - **Project URL** (e.g., `https://xxxxx.supabase.co`)
-   - **Publishable key** (starts with `eyJ...`) - This is safe to use in the browser with RLS enabled
+   - **Publishable key** - This will be either:
+     - **New format**: `sb_publishable_xxx...` (for projects created/updated after 2024)
+     - **Legacy format**: `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...` (older projects)
+   - Both formats are safe to use in the browser with RLS enabled
 
 ## 3. Set Environment Variables
 
@@ -24,10 +27,13 @@ Create `.env.local` file in project root:
 
 ```env
 VITE_SUPABASE_URL=https://xxxxx.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+VITE_SUPABASE_ANON_KEY=sb_publishable_xxx...  # or eyJ... for legacy projects
 ```
 
-**Note**: The variable name is `VITE_SUPABASE_ANON_KEY` but you'll copy the **Publishable key** from the dashboard.
+**Note**: 
+- The variable name is `VITE_SUPABASE_ANON_KEY` (works with both new and legacy keys)
+- Supabase JS SDK v2.18+ supports both key formats automatically
+- New projects use `sb_publishable_...` format, legacy projects use `eyJ...` format
 
 **Important**: Add `.env.local` to `.gitignore` (don't commit keys!)
 

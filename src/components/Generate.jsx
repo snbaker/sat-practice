@@ -75,7 +75,8 @@ export default function Generate({ results, onTestGenerated, onOpenSettings, cat
     }
   }, [useSupabase])
 
-  const questionCounts = [1, 5, 10, 20]
+  // Question counts: include 30 and 40 when AI is not selected
+  const questionCounts = mode === 'ai' ? [1, 5, 10, 20] : [1, 5, 10, 20, 30, 40]
 
   // Get available questions from uploaded (non-generated) tests
   const availableQuestions = useMemo(() => {

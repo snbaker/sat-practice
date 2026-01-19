@@ -50,18 +50,53 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
   const allAnswered = answeredCount === totalQuestions
   const currentQuestion = allQuestions[currentIndex]
 
-  // Trigger MathJax rendering
+  // Trigger MathJax rendering after content loads
   useEffect(() => {
+    if (!currentQuestion && !showResults) return // Don't render if no content
+    
     const renderMath = () => {
       if (window.MathJax?.typesetPromise) {
-        window.MathJax.typesetPromise().catch(err => console.log('MathJax error:', err))
+        // Use typesetPromise with a delay to ensure DOM is ready
+        setTimeout(() => {
+          // Target the question container specifically
+          const questionContainer = document.querySelector('[data-question-container]')
+          if (questionContainer) {
+            window.MathJax.typesetPromise([questionContainer]).catch(err => console.log('MathJax error:', err))
+          } else {
+            window.MathJax.typesetPromise().catch(err => console.log('MathJax error:', err))
+          }
+        }, 200)
       } else if (window.MathJax?.typeset) {
-        window.MathJax.typeset()
+        setTimeout(() => {
+          const questionContainer = document.querySelector('[data-question-container]')
+          if (questionContainer) {
+            window.MathJax.typeset([questionContainer])
+          } else {
+            window.MathJax.typeset()
+          }
+        }, 200)
       }
     }
-    const timer = setTimeout(renderMath, 50)
-    return () => clearTimeout(timer)
-  }, [currentIndex, showResults, expandedQuestion, responses])
+    
+    // Wait for MathJax to load and then render
+    if (window.MathJax?.startup) {
+      // MathJax is ready
+      renderMath()
+    } else if (window.MathJax) {
+      // MathJax is loading
+      const timer = setTimeout(renderMath, 300)
+      return () => clearTimeout(timer)
+    } else {
+      // Wait for MathJax to load
+      const checkMathJax = setInterval(() => {
+        if (window.MathJax) {
+          clearInterval(checkMathJax)
+          renderMath()
+        }
+      }, 100)
+      return () => clearInterval(checkMathJax)
+    }
+  }, [currentIndex, showResults, expandedQuestion, responses, currentQuestion])
 
   const handleSelectAnswer = (key, choice) => {
     setResponses(prev => ({
@@ -115,7 +150,18 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
 
   const renderContent = (value) => {
     if (!value) return null
-    if (typeof value === 'string') return value.trim() || null
+    if (typeof value === 'string') {
+      let content = value.trim() || null
+      if (!content) return null
+      // Fix double-escaped MathJax delimiters (if Supabase stored them as \\( instead of \()
+      // Replace \\( with \( and \\) with \)
+      content = content.split('\\\\(').join('\\(')
+      content = content.split('\\\\)').join('\\)')
+      // Also fix display math
+      content = content.split('\\\\\\[').join('\\[')
+      content = content.split('\\\\\\]').join('\\]')
+      return content
+    }
     if (typeof value === 'number') return String(value)
     if (value.body) return renderContent(value.body)
     if (value.html) return renderContent(value.html)
@@ -128,7 +174,7 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
       if (Object.keys(value).length === 0) return null
       // Try to find any string property as fallback
       const firstStringValue = Object.values(value).find(v => typeof v === 'string')
-      if (firstStringValue) return firstStringValue
+      if (firstStringValue) return renderContent(firstStringValue)
       // Last resort: stringify but warn in console
       console.warn('Unknown content structure:', value)
       return null
@@ -205,8 +251,9 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                           </div>
                           <div className="flex-1 min-w-0">
                             <div
-                              className={`text-sm [&_math]:inline ${!isExpanded ? 'line-clamp-2' : ''}`}
-                              dangerouslySetInnerHTML={{ __html: item.prompt }}
+                              className={`text-sm leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline ${!isExpanded ? 'line-clamp-2' : ''}`}
+                              style={{ lineHeight: '1.6' }}
+                              dangerouslySetInnerHTML={{ __html: renderContent(item.prompt) }}
                             />
                             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-base-content/60">
                               <span>Your answer: <span className={`font-medium ${isCorrect ? 'text-success' : 'text-error'}`}>{response || 'None'}</span></span>
@@ -229,7 +276,8 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                               <div className="bg-base-200 p-3 rounded text-sm">
                                 <div className="text-xs font-medium text-base-content/60 mb-1">Passage</div>
                                 <div
-                                  className="[&_math]:inline prose prose-sm max-w-none"
+                                  className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline prose prose-sm max-w-none"
+                                  style={{ lineHeight: '1.6' }}
                                   dangerouslySetInnerHTML={{ __html: renderContent(item.passage) }}
                                 />
                               </div>
@@ -251,7 +299,10 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                                       }`}
                                     >
                                       <span className="font-medium">{choiceKey}.</span>
-                                      <span dangerouslySetInnerHTML={{ __html: renderContent(value) }} />
+                                      <span 
+                                        className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline"
+                                        dangerouslySetInnerHTML={{ __html: renderContent(value) }} 
+                                      />
                                     </div>
                                   ))}
                                 </div>
@@ -262,7 +313,8 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                               <div className="bg-base-200 p-3 rounded">
                                 <div className="text-xs font-medium text-base-content/60 mb-1">Explanation</div>
                                 <div
-                                  className="text-sm [&_math]:inline [&_p]:inline"
+                                  className="text-sm [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline [&_p]:inline"
+                                  style={{ lineHeight: '1.6' }}
                                   dangerouslySetInnerHTML={{ __html: renderContent(item.answer.rationale) }}
                                 />
                               </div>
@@ -297,7 +349,9 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                                             </div>
                                             <div
                                               className="line-clamp-2 text-sm"
-                                              dangerouslySetInnerHTML={{ __html: origQuestion.prompt }}
+                                              className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline"
+                                              style={{ lineHeight: '1.6' }}
+                                              dangerouslySetInnerHTML={{ __html: renderContent(origQuestion.prompt) }}
                                             />
                                           </div>
                                         </div>
@@ -508,12 +562,13 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
 
       {/* Question */}
       {currentQuestion && (
-        <div className="card bg-base-200 shadow-md">
+        <div className="card bg-base-200 shadow-md" data-question-container>
           <div className="card-body">
             {renderContent(currentQuestion.passage) && (
               <div className="bg-base-100 border border-base-300 p-5 rounded-lg mb-6 text-sm leading-relaxed">
                 <div
-                  className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle prose prose-sm max-w-none"
+                  className="[&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline prose prose-sm max-w-none"
+                  style={{ lineHeight: '1.6' }}
                   dangerouslySetInnerHTML={{ __html: renderContent(currentQuestion.passage) }}
                 />
               </div>
@@ -521,8 +576,9 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
 
             <div className="bg-base-100 border border-base-300 p-5 rounded-lg mb-6">
               <div
-                className="text-lg leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle [&_p]:mb-2 [&_p]:last:mb-0"
-                dangerouslySetInnerHTML={{ __html: currentQuestion.prompt }}
+                className="text-lg leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline [&_p]:mb-2 [&_p]:last:mb-0"
+                style={{ lineHeight: '1.6' }}
+                dangerouslySetInnerHTML={{ __html: renderContent(currentQuestion.prompt) }}
               />
             </div>
 
@@ -542,9 +598,10 @@ export default function TakeTest({ result, allResults = [], onComplete, onCancel
                     <span className={`font-bold text-lg shrink-0 ${selectedAnswer === choiceKey ? 'text-primary-content' : 'text-primary'}`}>
                       {choiceKey}.
                     </span>
-                    <span 
-                      className={`flex-1 leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle ${selectedAnswer === choiceKey ? 'text-primary-content' : ''}`}
-                      dangerouslySetInnerHTML={{ __html: renderContent(value) }} 
+                    <span
+                      className={`flex-1 leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline ${selectedAnswer === choiceKey ? 'text-primary-content' : ''}`}
+                      style={{ lineHeight: '1.6' }}
+                      dangerouslySetInnerHTML={{ __html: renderContent(value) }}
                     />
                   </button>
                 ))}

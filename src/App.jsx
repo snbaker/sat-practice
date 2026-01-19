@@ -28,7 +28,8 @@ function App() {
   })
   const [user, setUser] = useState(null)
   const [authLoading, setAuthLoading] = useState(true)
-
+  const authCheckRef = useRef(false) // Prevent multiple simultaneous auth checks
+  
   // Get current tab from path
   const getActiveTab = () => {
     const path = location.pathname.slice(1) || 'dashboard'
@@ -36,61 +37,126 @@ function App() {
   }
   const activeTab = getActiveTab()
 
-  // Check authentication status and migrate sample data on first sign-in
+  // Single source of truth for auth state - only runs once on mount
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const currentUser = await getCurrentUser()
-        setUser(currentUser)
-        
-        // Check for new sample data to migrate (runs on every load to catch new files)
-        if (currentUser) {
-          // Always check for new files (migration is smart - only migrates new ones)
-          try {
-            const result = await migrateTestsFromData()
-            if (result.successCount > 0) {
-              console.log(`Migrated ${result.successCount} new test(s) from public/data/`)
-              // Reload data to show new tests
-              window.location.reload()
-            }
-          } catch (error) {
-            console.error('Migration check failed:', error)
-            // Continue anyway
-          }
+    let mounted = true
+    let authSubscription = null
+    let timeoutId = null
+
+    const initializeAuth = async () => {
+      if (authCheckRef.current) {
+        // Already checking, but ensure loading state is cleared
+        setTimeout(() => {
+          if (mounted) setAuthLoading(false)
+        }, 100)
+        return
+      }
+      authCheckRef.current = true
+
+      // Set a timeout to ensure authLoading is always cleared
+      timeoutId = setTimeout(() => {
+        if (mounted) {
+          setAuthLoading(false)
         }
+      }, 5000) // 5 second max wait
+
+      try {
+        // Get initial user with timeout
+        const currentUser = await Promise.race([
+          getCurrentUser(),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Auth check timeout')), 3000)
+          )
+        ])
+        
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!mounted) return
+        
+        setUser(currentUser)
+        setAuthLoading(false)
+        
+        // Set up auth state listener
+        const { data: { subscription } } = onAuthStateChange(async (event, session) => {
+          if (!mounted) return
+          
+          if (event === 'SIGNED_IN' && session?.user) {
+            setUser(session.user)
+            
+            // Navigate away from auth page immediately after successful sign-in
+            // Use window.location to avoid React Router issues
+            if (window.location.pathname === '/auth') {
+              window.location.href = '/'
+              return
+            }
+            
+            // Check for new sample data to migrate on sign-in (non-blocking, runs in background)
+            setTimeout(() => {
+              if (mounted) {
+                console.log('Checking for new test files to migrate...')
+                migrateTestsFromData()
+                  .then(result => {
+                    if (result.successCount > 0 && mounted) {
+                      console.log(`Migrated ${result.successCount} new test(s) from public/data/`)
+                      setTimeout(() => {
+                        if (mounted) window.location.reload()
+                      }, 1000)
+                    }
+                  })
+                  .catch(error => {
+                    // Silently fail - don't block user
+                    if (error.name !== 'AbortError') {
+                      console.error('Migration failed:', error)
+                    }
+                  })
+              }
+            }, 500)
+          } else if (event === 'SIGNED_OUT') {
+            if (mounted) {
+              setUser(null)
+            }
+          }
+        })
+        
+        authSubscription = subscription
       } catch (e) {
-        console.log('Not authenticated')
-      } finally {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (!mounted) return
+        // Silently handle - user is not authenticated (don't log to avoid spam)
+        setUser(null)
         setAuthLoading(false)
       }
     }
-    checkAuth()
 
-    // Listen for auth changes
-    const { data: { subscription } } = onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session?.user) {
-        setUser(session.user)
-        handleAuthSuccess(session.user)
-        
-        // Check for new sample data to migrate on sign-in
-        console.log('Checking for new test files to migrate...')
-        try {
-          const result = await migrateTestsFromData()
-          if (result.successCount > 0) {
-            console.log(`Migrated ${result.successCount} new test(s) from public/data/`)
-            // Reload data to show new tests
-            setTimeout(() => window.location.reload(), 1000)
-          }
-        } catch (error) {
-          console.error('Migration failed:', error)
-        }
-      } else if (event === 'SIGNED_OUT') {
-        setUser(null)
+    initializeAuth()
+
+    return () => {
+      mounted = false
+      if (timeoutId) clearTimeout(timeoutId)
+      if (authSubscription) {
+        authSubscription.unsubscribe()
       }
-    })
-
-    return () => subscription.unsubscribe()
-  }, [])
+    }
+  }, []) // Only run once on mount - no dependencies
+  
+  // Handle redirects based on auth state - separate from auth check
+  // Use a ref to prevent redirect loops
+  const redirectingRef = useRef(false)
+  useEffect(() => {
+    if (authLoading) return // Wait for initial auth check
+    if (redirectingRef.current) return // Already redirecting
+    
+    if (user && location.pathname === '/auth') {
+      // User is authenticated but on auth page - redirect to dashboard
+      redirectingRef.current = true
+      navigate('/', { replace: true })
+      setTimeout(() => { redirectingRef.current = false }, 100)
+    } else if (!user && location.pathname !== '/auth') {
+      // User is not authenticated and not on auth page - redirect to auth
+      redirectingRef.current = true
+      navigate('/auth', { replace: true })
+      setTimeout(() => { redirectingRef.current = false }, 100)
+    }
+  }, [authLoading, user, location.pathname, navigate])
 
   const handleAuthSuccess = (authenticatedUser) => {
     setUser(authenticatedUser)
@@ -108,12 +174,47 @@ function App() {
 
   // Load data from Supabase or localStorage (for backward compatibility)
   useEffect(() => {
+    let mounted = true
+    const abortController = new AbortController()
+    
+    const loadFromLocalStorage = () => {
+      if (!mounted) return
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored)
+          if (parsed.length > 0) {
+            setResults(parsed)
+            setInitialized(true)
+            return
+          }
+        } catch (e) {
+          console.error('Failed to load stored results:', e)
+        }
+      }
+      // Load sample data if no results
+      if (mounted) {
+        loadSampleData().then(() => {
+          if (mounted) {
+            setInitialized(true)
+          }
+        })
+      }
+    }
+    
     const loadData = async () => {
       if (user) {
         // Load from Supabase
         try {
+          // Small delay to ensure auth state is stable
+          await new Promise(resolve => setTimeout(resolve, 100))
+          if (!mounted) return
+          
           const tests = await getMyTests()
+          if (!mounted) return
+          
           const attempts = await getMyAttempts()
+          if (!mounted) return
           
           // Convert to legacy format for now (for compatibility with existing components)
           // Deduplicate by test name (keep the most recent one if duplicates exist)
@@ -149,40 +250,35 @@ function App() {
             }
           })
           
-          setResults(legacyResults)
-          setInitialized(true)
+          if (mounted) {
+            setResults(legacyResults)
+            setInitialized(true)
+          }
         } catch (error) {
-          console.error('Failed to load from Supabase:', error)
+          if (!mounted) return
+          // Only log if it's not an abort error
+          if (error.name !== 'AbortError') {
+            console.error('Failed to load from Supabase:', error)
+          }
           // Fallback to localStorage
-          loadFromLocalStorage()
+          if (mounted) {
+            loadFromLocalStorage()
+          }
         }
       } else {
         // Not authenticated - load from localStorage (backward compatibility)
-        loadFromLocalStorage()
-      }
-    }
-    
-    const loadFromLocalStorage = () => {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored)
-          if (parsed.length > 0) {
-            setResults(parsed)
-            setInitialized(true)
-            return
-          }
-        } catch (e) {
-          console.error('Failed to load stored results:', e)
+        if (mounted) {
+          loadFromLocalStorage()
         }
       }
-      // Load sample data if no results
-      loadSampleData().then(() => {
-        setInitialized(true)
-      })
     }
     
     loadData()
+    
+    return () => {
+      mounted = false
+      abortController.abort()
+    }
   }, [user])
 
   const loadSampleData = async (merge = false) => {
@@ -465,7 +561,13 @@ function App() {
         </div>
       </div>
 
-      <div className="container mx-auto px-4 py-8 max-w-4xl">
+      {/* Show loading spinner only briefly while checking auth, or show content */}
+      {authLoading && !user && location.pathname !== '/auth' ? (
+        <div className="flex items-center justify-center min-h-screen">
+          <span className="loading loading-spinner loading-lg"></span>
+        </div>
+      ) : (user || location.pathname === '/auth') ? (
+        <div className="container mx-auto px-4 py-8 max-w-4xl">
         <div role="tablist" className="tabs tabs-boxed mb-6">
           <Link
             to="/"
@@ -748,7 +850,8 @@ function App() {
             </div>
           } />
         </Routes>
-      </div>
+        </div>
+      ) : null}
 
       <Settings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

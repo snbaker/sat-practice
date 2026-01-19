@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { getTopicName } from '../utils/topicMappings'
-import { getQuestions, getCurrentUser } from '../services/supabase'
+import { getQuestions, getCurrentUser, syncQuestionsFromLocal, clearAllQuestions } from '../services/supabase'
 
 export default function QuestionBank() {
   const [questions, setQuestions] = useState([])
@@ -8,6 +8,8 @@ export default function QuestionBank() {
   const [error, setError] = useState(null)
   const [expandedQuestion, setExpandedQuestion] = useState(null)
   const [useSupabase, setUseSupabase] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncProgress, setSyncProgress] = useState(null)
 
   // Filters
   const [sectionFilter, setSectionFilter] = useState('all')
@@ -22,30 +24,67 @@ export default function QuestionBank() {
     return saved ? parseInt(saved, 10) : 25
   })
 
-  // Check if user is authenticated and Supabase is available
+  // Check if user is authenticated and Supabase is available, then load questions
   useEffect(() => {
-    const checkSupabase = async () => {
+    let mounted = true
+    
+    const checkAndLoad = async () => {
       try {
+        setLoading(true)
+        setError(null)
+        
+        // Check auth and Supabase availability
         const user = await getCurrentUser()
         const hasSupabaseUrl = import.meta.env.VITE_SUPABASE_URL
-        setUseSupabase(!!(user && hasSupabaseUrl))
-      } catch (e) {
-        setUseSupabase(false)
-      }
-    }
-    checkSupabase()
-  }, [])
-
-  // Load bank questions
-  useEffect(() => {
-    const loadBank = async () => {
-      try {
-        if (useSupabase) {
+        const shouldUseSupabase = !!(user && hasSupabaseUrl)
+        
+        if (!mounted) return
+        setUseSupabase(shouldUseSupabase)
+        
+        if (shouldUseSupabase) {
           // Load from Supabase
-          const data = await getQuestions()
-          setQuestions(data)
+          console.log('Loading questions from Supabase...')
+          try {
+            const data = await getQuestions()
+            if (!mounted) return
+            console.log(`Loaded ${data?.length || 0} questions from Supabase`)
+            if (data && data.length > 0) {
+              setQuestions(data)
+            } else {
+              // Supabase returned empty - fallback to local
+              console.warn('Supabase returned 0 questions, falling back to local file...')
+              const response = await fetch('/bank/question-bank.json')
+              if (!response.ok) throw new Error('Failed to load question bank')
+              const localData = await response.json()
+              const allQuestions = localData.flatMap(section =>
+                (section.items || []).map(item => ({
+                  ...item,
+                  sectionId: section.id
+                }))
+              )
+              console.log(`Loaded ${allQuestions.length} questions from local file (fallback)`)
+              setQuestions(allQuestions)
+            }
+          } catch (supabaseError) {
+            console.error('Supabase error:', supabaseError)
+            // Fallback to local on Supabase error
+            if (!mounted) return
+            const response = await fetch('/bank/question-bank.json')
+            if (!response.ok) throw new Error('Failed to load question bank')
+            const localData = await response.json()
+            const allQuestions = localData.flatMap(section =>
+              (section.items || []).map(item => ({
+                ...item,
+                sectionId: section.id
+              }))
+            )
+            console.log(`Loaded ${allQuestions.length} questions from local file (fallback after error)`)
+            setQuestions(allQuestions)
+            setError(`Supabase error: ${supabaseError.message}. Using local questions.`)
+          }
         } else {
           // Fallback to local file
+          console.log('Loading questions from local file...')
           const response = await fetch('/bank/question-bank.json')
           if (!response.ok) throw new Error('Failed to load question bank')
           const data = await response.json()
@@ -57,19 +96,28 @@ export default function QuestionBank() {
               sectionId: section.id
             }))
           )
+          if (!mounted) return
+          console.log(`Loaded ${allQuestions.length} questions from local file`)
           setQuestions(allQuestions)
         }
       } catch (e) {
-        setError(e.message)
+        if (!mounted) return
         console.error('Error loading questions:', e)
+        setError(e.message || 'Failed to load questions')
+        setQuestions([])
       } finally {
-        setLoading(false)
+        if (mounted) {
+          setLoading(false)
+        }
       }
     }
-    if (useSupabase !== null) {
-      loadBank()
+    
+    checkAndLoad()
+    
+    return () => {
+      mounted = false
     }
-  }, [useSupabase])
+  }, [])
 
   // Get unique filter options
   const filterOptions = useMemo(() => {
@@ -136,7 +184,21 @@ export default function QuestionBank() {
 
   const renderContent = (value) => {
     if (!value) return null
-    if (typeof value === 'string') return value.trim() || null
+    if (typeof value === 'string') {
+      let content = value.trim() || null
+      if (!content) return null
+      // Fix double-escaped MathJax delimiters (if Supabase stored them as \\( instead of \()
+      // Use split/join to avoid regex escaping issues
+      // Replace \\( with \(
+      content = content.split('\\\\(').join('\\(')
+      // Replace \\) with \)
+      content = content.split('\\\\)').join('\\)')
+      // Replace \\[ with \[
+      content = content.split('\\\\[').join('\\[')
+      // Replace \\] with \]
+      content = content.split('\\\\]').join('\\]')
+      return content
+    }
     if (typeof value === 'number') return String(value)
     if (value.body) return renderContent(value.body)
     if (value.html) return renderContent(value.html)
@@ -146,12 +208,37 @@ export default function QuestionBank() {
 
   // Trigger MathJax rendering
   useEffect(() => {
-    const timer = setTimeout(() => {
+    const renderMath = () => {
       if (window.MathJax?.typesetPromise) {
-        window.MathJax.typesetPromise().catch(err => console.log('MathJax error:', err))
+        // Use typesetPromise with a longer delay to ensure DOM is ready
+        setTimeout(() => {
+          window.MathJax.typesetPromise().catch(err => console.log('MathJax error:', err))
+        }, 150)
+      } else if (window.MathJax?.typeset) {
+        setTimeout(() => {
+          window.MathJax.typeset()
+        }, 150)
       }
-    }, 100)
-    return () => clearTimeout(timer)
+    }
+    
+    // Wait for MathJax to load and then render
+    if (window.MathJax?.startup) {
+      // MathJax is ready
+      renderMath()
+    } else if (window.MathJax) {
+      // MathJax is loading
+      const timer = setTimeout(renderMath, 200)
+      return () => clearTimeout(timer)
+    } else {
+      // Wait for MathJax to load
+      const checkMathJax = setInterval(() => {
+        if (window.MathJax) {
+          clearInterval(checkMathJax)
+          renderMath()
+        }
+      }, 100)
+      return () => clearInterval(checkMathJax)
+    }
   }, [paginatedQuestions, expandedQuestion])
 
   if (loading) {
@@ -170,16 +257,170 @@ export default function QuestionBank() {
     )
   }
 
-  if (questions.length === 0) {
+  const handleSyncToSupabase = async () => {
+    if (!useSupabase) {
+      setError('You must be authenticated to sync questions to Supabase')
+      return
+    }
+    
+    setSyncing(true)
+    setError(null)
+    setSyncProgress('Loading questions from local file...')
+    
+    try {
+      await syncQuestionsFromLocal()
+      setSyncProgress('Sync complete! Reloading questions...')
+      
+      // Reload questions from Supabase
+      const data = await getQuestions()
+      setQuestions(data || [])
+      setSyncProgress(null)
+      
+      // Show success message briefly
+      setTimeout(() => {
+        setSyncProgress(null)
+      }, 2000)
+    } catch (e) {
+      console.error('Sync error:', e)
+      setError(e.message || 'Failed to sync questions to Supabase')
+      setSyncProgress(null)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleClearAll = async () => {
+    if (!useSupabase) {
+      setError('You must be authenticated to clear questions')
+      return
+    }
+    
+    if (!confirm('Are you sure you want to delete ALL questions from Supabase? This cannot be undone.')) {
+      return
+    }
+    
+    setSyncing(true)
+    setError(null)
+    setSyncProgress('Clearing all questions...')
+    
+    try {
+      await clearAllQuestions()
+      setSyncProgress('All questions cleared. Reloading...')
+      
+      // Reload questions (should be empty now)
+      const data = await getQuestions()
+      setQuestions(data || [])
+      setSyncProgress(null)
+      
+      setTimeout(() => {
+        setSyncProgress(null)
+      }, 2000)
+    } catch (e) {
+      console.error('Clear error:', e)
+      setError(e.message || 'Failed to clear questions')
+      setSyncProgress(null)
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  if (questions.length === 0 && !loading) {
     return (
-      <div className="alert alert-info">
-        <span>No questions in the bank yet. Add question files to /public/bank/</span>
+      <div className="space-y-4">
+        {error && (
+          <div className="alert alert-error">
+            <span>Error: {error}</span>
+          </div>
+        )}
+        {syncProgress && (
+          <div className="alert alert-info">
+            <span className="loading loading-spinner loading-sm mr-2"></span>
+            {syncProgress}
+          </div>
+        )}
+        <div className="alert alert-info">
+          <div className="flex items-center justify-between">
+            <span>
+              {useSupabase 
+                ? 'No questions found in Supabase. Sync questions from local file to get started.'
+                : 'No questions in the bank yet. Add question files to /public/bank/'
+              }
+            </span>
+            {useSupabase && (
+              <button
+                className="btn btn-primary btn-sm ml-4"
+                onClick={handleSyncToSupabase}
+                disabled={syncing}
+              >
+                {syncing ? (
+                  <>
+                    <span className="loading loading-spinner loading-sm"></span>
+                    Syncing...
+                  </>
+                ) : (
+                  'Sync Questions to Supabase'
+                )}
+              </button>
+            )}
+          </div>
+        </div>
       </div>
     )
   }
 
   return (
     <div className="space-y-6">
+      {/* Sync/Clear buttons and progress */}
+      {useSupabase && (
+        <div className="flex justify-end items-center gap-2">
+          {syncProgress && (
+            <div className="alert alert-info py-2">
+              <span className="loading loading-spinner loading-sm mr-2"></span>
+              {syncProgress}
+            </div>
+          )}
+          <button
+            className="btn btn-error btn-outline btn-sm"
+            onClick={handleClearAll}
+            disabled={syncing}
+            title="Clear all questions from Supabase"
+          >
+            {syncing ? (
+              <>
+                <span className="loading loading-spinner loading-sm"></span>
+                Clearing...
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                </svg>
+                Clear All
+              </>
+            )}
+          </button>
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={handleSyncToSupabase}
+            disabled={syncing}
+            title="Sync questions from local file to Supabase"
+          >
+            {syncing ? (
+              <>
+                <span className="loading loading-spinner loading-sm"></span>
+                Syncing...
+              </>
+            ) : (
+              <>
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+                Sync to Supabase
+              </>
+            )}
+          </button>
+        </div>
+      )}
       {/* Filters */}
       <div className="card bg-base-200 shadow-md">
         <div className="card-body py-4">
@@ -338,19 +579,20 @@ export default function QuestionBank() {
           return (
             <div
               key={q.questionId || idx}
-              className="card bg-base-200 shadow-md"
+              className="card bg-base-100 shadow-md border border-base-300"
             >
               <div
                 className="card-body py-4 cursor-pointer"
                 onClick={() => setExpandedQuestion(isExpanded ? null : q.questionId)}
               >
-                <div className="flex items-start gap-3">
-                  <div className="flex flex-col gap-1">
-                    <span className={`badge badge-sm ${q.sectionId === 'math' ? 'badge-secondary' : 'badge-primary'}`}>
-                      {q.sectionId === 'reading' ? 'R&W' : 'Math'}
+                <div className="flex items-start gap-4">
+                  {/* Left side: Badges stacked vertically */}
+                  <div className="flex flex-col gap-1.5 shrink-0">
+                    <span className={`badge ${q.sectionId === 'math' ? 'badge-secondary' : 'badge-primary'}`}>
+                      {q.sectionId === 'reading' ? 'Reading' : 'Math'}
                     </span>
                     {q.metadata?.difficulty && (
-                      <span className={`badge badge-sm badge-outline ${
+                      <span className={`badge ${
                         q.metadata.difficulty === 'Easy' ? 'badge-success' :
                         q.metadata.difficulty === 'Medium' ? 'badge-warning' : 'badge-error'
                       }`}>
@@ -359,34 +601,63 @@ export default function QuestionBank() {
                     )}
                   </div>
 
+                  {/* Middle: Question prompt and categories */}
                   <div className="flex-1 min-w-0">
                     <div
-                      className={`text-sm [&_math]:inline ${!isExpanded ? 'line-clamp-2' : ''}`}
-                      dangerouslySetInnerHTML={{ __html: q.prompt }}
+                      className={`text-base leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-baseline ${!isExpanded ? 'line-clamp-2' : ''}`}
+                      style={{ lineHeight: '1.6' }}
+                      dangerouslySetInnerHTML={{ __html: renderContent(q.prompt) }}
                     />
-                    <div className="flex flex-wrap gap-2 mt-2 text-xs text-base-content/60">
-                      {q.metadata?.domain && (
-                        <span className="badge badge-ghost badge-xs">{q.metadata.domain}</span>
+                    {/* Categories row */}
+                    <div className="flex flex-wrap items-center gap-2 mt-2 text-sm">
+                      {q.metadata?.PRIMARY_CLASS_CD && (
+                        <span className="text-base-content/70">{getTopicName(q.metadata.PRIMARY_CLASS_CD, q.sectionId)}</span>
                       )}
-                      {q.metadata?.skill && (
-                        <span className="badge badge-ghost badge-xs">{q.metadata.skill}</span>
+                      {q.metadata?.SECONDARY_CLASS_CD && (
+                        <>
+                          {q.metadata?.PRIMARY_CLASS_CD && <span className="text-base-content/40">•</span>}
+                          <span className="text-base-content/70">{getTopicName(q.metadata.SECONDARY_CLASS_CD, q.sectionId)}</span>
+                        </>
                       )}
-                      <span className="text-base-content/40">ID: {q.questionId}</span>
+                      {q.metadata?.domain && !q.metadata?.PRIMARY_CLASS_CD && (
+                        <span className="text-base-content/70">{q.metadata.domain}</span>
+                      )}
+                      {q.metadata?.skill && !q.metadata?.SECONDARY_CLASS_CD && (
+                        <>
+                          {q.metadata?.domain && <span className="text-base-content/40">•</span>}
+                          <span className="text-base-content/70">{q.metadata.skill}</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
-                  <svg
-                    className={`w-5 h-5 shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
+                  {/* Right side: ID and chevron */}
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="text-xs text-base-content/50 font-mono">{q.questionId}</span>
+                    <svg
+                      className={`w-5 h-5 text-base-content/40 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
                 </div>
 
                 {isExpanded && (
                   <div className="mt-4 space-y-4 border-t border-base-300 pt-4">
+                    {/* Passage */}
+                    {q.passage && (
+                      <div className="bg-base-100 border border-base-300 p-4 rounded-lg">
+                        <div className="text-xs font-medium text-base-content/60 mb-2">Passage</div>
+                        <div
+                          className="text-sm leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle prose prose-sm max-w-none"
+                          dangerouslySetInnerHTML={{ __html: renderContent(q.passage) }}
+                        />
+                      </div>
+                    )}
+
                     {/* Answer Choices */}
                     {q.answer?.choices && (
                       <div>
@@ -395,16 +666,19 @@ export default function QuestionBank() {
                           {Object.entries(q.answer.choices).map(([key, value]) => (
                             <div
                               key={key}
-                              className={`p-2 rounded text-sm flex gap-2 ${
+                              className={`p-3 rounded-lg border-2 flex gap-2 ${
                                 key === q.answer.correctChoice
-                                  ? 'bg-success/20 text-success'
-                                  : 'bg-base-100'
+                                  ? 'bg-success/20 text-success border-success/30'
+                                  : 'bg-base-100 border-base-300'
                               }`}
                             >
-                              <span className="font-bold">{key}.</span>
-                              <span dangerouslySetInnerHTML={{ __html: renderContent(value) }} />
+                              <span className="font-bold text-base shrink-0">{key}.</span>
+                              <span 
+                                className="flex-1 leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle"
+                                dangerouslySetInnerHTML={{ __html: renderContent(value) }}
+                              />
                               {key === q.answer.correctChoice && (
-                                <span className="badge badge-success badge-xs ml-auto">Correct</span>
+                                <span className="badge badge-success badge-xs ml-auto shrink-0">Correct</span>
                               )}
                             </div>
                           ))}
@@ -415,9 +689,9 @@ export default function QuestionBank() {
                     {/* Rationale */}
                     {q.answer?.rationale && (
                       <div>
-                        <div className="text-xs font-medium text-base-content/60 mb-1">Explanation</div>
+                        <div className="text-xs font-medium text-base-content/60 mb-2">Explanation</div>
                         <div
-                          className="text-sm bg-base-100 p-3 rounded [&_math]:inline"
+                          className="text-sm bg-base-100 border border-base-300 p-4 rounded-lg leading-relaxed [&_math]:inline [&_mjx-container]:!inline-block [&_mjx-container]:align-middle [&_p]:mb-2 [&_p]:last:mb-0"
                           dangerouslySetInnerHTML={{ __html: renderContent(q.answer.rationale) }}
                         />
                       </div>

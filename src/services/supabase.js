@@ -2,9 +2,11 @@
 import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || ''
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+// Supports both legacy (eyJ...) and new (sb_publishable_...) key formats
+const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || ''
 
 // Create Supabase client
+// Note: @supabase/supabase-js v2.18+ supports both legacy and new key formats
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true,
@@ -412,88 +414,312 @@ export async function bulkSyncQuestions(questions) {
   const user = await getCurrentUser()
   if (!user) throw new Error('Not authenticated')
 
+  // First, get existing question IDs to check for duplicates
+  const { data: existingQuestions } = await supabase
+    .from('questions')
+    .select('id')
+  
+  // Normalize existing IDs (trim whitespace) for comparison
+  const existingIds = new Set(
+    (existingQuestions || []).map(q => String(q.id || '').trim().replace(/\s+/g, ''))
+  )
+  console.log(`Found ${existingIds.size} existing questions in database`)
+
   // Process in batches of 50
   const batchSize = 50
   const results = []
+  let errorCount = 0
+  let newCount = 0
+  let updateCount = 0
   
   for (let i = 0; i < questions.length; i += batchSize) {
     const batch = questions.slice(i, i + batchSize)
-    const questionData = batch.map(q => ({
-      id: q.questionId || q.id,
-      section: q.sectionId || q.section || 'reading',
-      prompt: q.prompt || '',
-      passage: q.passage || null,
-      answer: q.answer || {
-        choices: {},
-        correctChoice: null,
-        rationale: null
-      },
-      metadata: q.metadata || {}
-    }))
+    
+    // Filter out questions without valid IDs and log them
+    const validQuestions = batch.filter(q => {
+      const id = q.questionId || q.id
+      if (!id) {
+        console.warn('Skipping question with no ID:', q)
+        errorCount++
+        return false
+      }
+      return true
+    })
+    
+    if (validQuestions.length === 0) {
+      console.warn(`Batch ${i}-${i + batch.length} had no valid questions, skipping`)
+      continue
+    }
+    
+    const questionData = validQuestions.map(q => {
+      let id = String(q.questionId || q.id || '').trim() // Ensure ID is a string and trimmed
+      
+      // Normalize ID - remove any extra whitespace, ensure consistent format
+      id = id.replace(/\s+/g, '') // Remove all whitespace
+      
+      if (!id || id === 'undefined' || id === 'null' || id === '') {
+        throw new Error('Question missing required ID field')
+      }
+      
+      return {
+        id: id,
+        section: q.sectionId || q.section || 'reading',
+        prompt: q.prompt || '',
+        passage: q.passage || null,
+        answer: q.answer || {
+          choices: {},
+          correctChoice: null,
+          rationale: null
+        },
+        metadata: q.metadata || {}
+      }
+    })
+    
+    // Count new vs updates and log new ones
+    const newIds = []
+    questionData.forEach(q => {
+      if (existingIds.has(q.id)) {
+        updateCount++
+      } else {
+        newCount++
+        newIds.push(q.id)
+      }
+    })
+    
+    // Log new question IDs to help identify duplicates
+    if (newIds.length > 0 && i === 0) {
+      console.log('New question IDs (not found in existing):', newIds.slice(0, 5))
+    }
 
+    // Use upsert with proper conflict resolution
+    // For TEXT primary keys, we need to ensure exact match
     const { data, error } = await supabase
       .from('questions')
-      .upsert(questionData, { onConflict: 'id' })
+      .upsert(questionData, { 
+        onConflict: 'id'
+      })
+      .select('id')
 
     if (error) {
       console.error(`Error syncing batch ${i}-${i + batch.length}:`, error)
       throw error
     }
     
-    results.push(...(data || []))
+    // If data is returned, use it; otherwise count the batch as successful
+    if (data && data.length > 0) {
+      results.push(...data)
+    } else {
+      // Upsert succeeded but didn't return data (common with upsert)
+      // Count the batch size as successful
+      results.push(...new Array(questionData.length).fill({ synced: true }))
+    }
   }
+  
+  if (errorCount > 0) {
+    console.warn(`Skipped ${errorCount} questions due to missing IDs`)
+  }
+  
+  console.log(`Sync summary: ${newCount} new, ${updateCount} updated`)
   
   return results
 }
 
 export async function getQuestions(filters = {}) {
-  let query = supabase
+  try {
+    let query = supabase
+      .from('questions')
+      .select('*')
+
+    if (filters.section) {
+      query = query.eq('section', filters.section)
+    }
+
+    if (filters.domain) {
+      query = query.eq('metadata->>domain', filters.domain)
+    }
+
+    if (filters.difficulty) {
+      query = query.eq('metadata->>difficulty', filters.difficulty)
+    }
+
+    if (filters.search) {
+      // Simple text search in prompt
+      query = query.ilike('prompt', `%${filters.search}%`)
+    }
+
+    if (filters.limit) {
+      query = query.limit(filters.limit)
+    }
+
+    if (filters.orderBy) {
+      query = query.order(filters.orderBy, { ascending: filters.ascending !== false })
+    }
+
+    const { data, error } = await query
+
+    if (error) {
+      console.error('Supabase query error:', error)
+      throw error
+    }
+    
+    console.log(`Supabase query returned ${data?.length || 0} rows`)
+    
+    // Transform to match expected format
+    return (data || []).map(q => ({
+      questionId: q.id,
+      externalId: q.id,
+      section: q.section === 'reading' ? 'Reading' : 'Math',
+      sectionId: q.section,
+      prompt: q.prompt,
+      passage: q.passage,
+      answer: q.answer,
+      metadata: q.metadata
+    }))
+  } catch (error) {
+    console.error('Error in getQuestions:', error)
+    throw error
+  }
+}
+
+// Clear all questions from Supabase
+export async function clearAllQuestions() {
+  const user = await getCurrentUser()
+  if (!user) throw new Error('Not authenticated')
+
+  // Get all question IDs first
+  const { data: allQuestions, error: selectError } = await supabase
     .from('questions')
-    .select('*')
-
-  if (filters.section) {
-    query = query.eq('section', filters.section)
-  }
-
-  if (filters.domain) {
-    query = query.eq('metadata->>domain', filters.domain)
-  }
-
-  if (filters.difficulty) {
-    query = query.eq('metadata->>difficulty', filters.difficulty)
-  }
-
-  if (filters.search) {
-    // Simple text search in prompt
-    query = query.ilike('prompt', `%${filters.search}%`)
-  }
-
-  if (filters.limit) {
-    query = query.limit(filters.limit)
-  }
-
-  if (filters.orderBy) {
-    query = query.order(filters.orderBy, { ascending: filters.ascending !== false })
-  }
-
-  const { data, error } = await query
-
-  if (error) throw error
+    .select('id')
   
-  // Transform to match expected format
-  return (data || []).map(q => ({
-    questionId: q.id,
-    externalId: q.id,
-    section: q.section === 'reading' ? 'Reading' : 'Math',
-    sectionId: q.section,
-    prompt: q.prompt,
-    passage: q.passage,
-    answer: q.answer,
-    metadata: q.metadata
-  }))
+  if (selectError) {
+    console.error('Error fetching questions:', selectError)
+    throw selectError
+  }
+  
+  if (!allQuestions || allQuestions.length === 0) {
+    console.log('No questions to clear')
+    return { success: true, count: 0 }
+  }
+
+  console.log(`Attempting to delete ${allQuestions.length} questions...`)
+
+  // Delete questions in batches (Supabase has limits)
+  const batchSize = 100
+  let deletedCount = 0
+  
+  for (let i = 0; i < allQuestions.length; i += batchSize) {
+    const batch = allQuestions.slice(i, i + batchSize)
+    const ids = batch.map(q => q.id)
+    
+    const { error, count } = await supabase
+      .from('questions')
+      .delete()
+      .in('id', ids)
+      .select()
+
+    if (error) {
+      console.error(`Error deleting batch ${i}-${i + batch.length}:`, error)
+      // Check if it's a permissions error
+      if (error.message?.includes('permission') || error.message?.includes('policy')) {
+        throw new Error('Permission denied: RLS policy does not allow deleting questions. You may need to add a DELETE policy or use a service role key.')
+      }
+      throw error
+    }
+    
+    deletedCount += (count || batch.length)
+    console.log(`Deleted batch ${Math.floor(i / batchSize) + 1}: ${batch.length} questions`)
+  }
+
+  console.log(`Successfully deleted ${deletedCount} questions`)
+  return { success: true, count: deletedCount }
 }
 
 // Get question count
+// Sync questions from local JSON file to Supabase (browser-based)
+export async function syncQuestionsFromLocal() {
+  try {
+    // Load local question bank
+    const response = await fetch('/bank/question-bank.json')
+    if (!response.ok) {
+      throw new Error('Failed to load local question bank')
+    }
+    const questionBank = await response.json()
+    
+    // Helper to fix MathJax delimiters
+    const fixMathDelimiters = (str) => {
+      if (!str || typeof str !== 'string') return str
+      return str
+        .split('\\\\(').join('\\(')
+        .split('\\\\)').join('\\)')
+        .split('\\\\[').join('\\[')
+        .split('\\\\]').join('\\]')
+    }
+    
+    const fixMathInObject = (obj) => {
+      if (typeof obj === 'string') {
+        return fixMathDelimiters(obj)
+      } else if (Array.isArray(obj)) {
+        return obj.map(fixMathInObject)
+      } else if (obj && typeof obj === 'object') {
+        const fixed = {}
+        for (const [key, value] of Object.entries(obj)) {
+          fixed[key] = fixMathInObject(value)
+        }
+        return fixed
+      }
+      return obj
+    }
+    
+    // Transform questions to Supabase format
+    const questions = []
+    let skippedCount = 0
+    
+    questionBank.forEach(section => {
+      (section.items || []).forEach((item, index) => {
+        // Ensure we have a valid ID - generate one if missing
+        const questionId = item.questionId || item.externalId || `generated-${section.id}-${index}-${Date.now()}`
+        
+        if (!questionId) {
+          console.warn('Skipping question with no ID:', item)
+          skippedCount++
+          return
+        }
+        
+        questions.push({
+          questionId: questionId,
+          id: questionId,
+          sectionId: section.id === 'reading' ? 'reading' : 'math',
+          section: section.id === 'reading' ? 'reading' : 'math',
+          prompt: fixMathDelimiters(item.prompt || ''),
+          passage: item.passage ? fixMathDelimiters(item.passage) : null,
+          answer: {
+            choices: fixMathInObject(item.answer?.choices || {}),
+            correctChoice: item.answer?.correctChoice,
+            correctAnswer: item.answer?.correctAnswer,
+            rationale: item.answer?.rationale ? fixMathDelimiters(item.answer.rationale) : null
+          },
+          metadata: item.metadata || {}
+        })
+      })
+    })
+    
+    if (skippedCount > 0) {
+      console.warn(`Skipped ${skippedCount} questions with missing IDs`)
+    }
+    
+    console.log(`Syncing ${questions.length} questions to Supabase...`)
+    
+    // Use bulkSyncQuestions to sync in batches
+    const result = await bulkSyncQuestions(questions)
+    const actualCount = questions.length // Use input count since upsert may not return data
+    console.log(`Successfully synced ${actualCount} questions`)
+    return { success: true, count: actualCount }
+  } catch (error) {
+    console.error('Error syncing questions:', error)
+    throw error
+  }
+}
+
 export async function getQuestionCount(filters = {}) {
   let query = supabase
     .from('questions')

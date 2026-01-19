@@ -48,6 +48,7 @@ export default function Auth({ onAuthSuccess }) {
         const { user: signedInUser } = await signIn(email, password)
         setUser(signedInUser)
         if (onAuthSuccess) onAuthSuccess(signedInUser)
+        // Navigation will be handled by App.jsx auth state change
       }
     } catch (err) {
       setError(err.message || 'An error occurred')
